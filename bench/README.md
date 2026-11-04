@@ -6,9 +6,12 @@ Alles läuft lokal; es werden nur öffentliche Modelle/Beispielbilder herunterge
 ## Auf dem Laptop (Node ≥ 20, Python ≥ 3.9, Chrome/Chromium via Playwright)
 
 ```bash
-cd bench && bash fetch-models.sh                    # MediaPipe-Modelle + Testbild (Google/Ultralytics-Assets)
-cd web && npm install && npx playwright install chromium   # lokal, falls Playwright nicht global vorhanden
-python ../py/fetch_onnx.py                          # RTMPose-t/s/m (Halpe26) – URL-Download ungetestet, s. Skript
+cd bench
+node fetch-models.mjs                                 # MediaPipe-Modelle + Testbild (läuft auch unter Windows)
+cd web
+npm install                                          # installiert Playwright
+npx playwright install chromium                      # lädt den Test-Browser
+# optional (nur nötig, falls MediaPipe nicht reicht): python ../py/fetch_onnx.py   # RTMPose, Download ungetestet
 node run-headless.mjs --iters 100 --out ../results/laptop-cpu.json            # reine CPU/WASM-Messung
 node run-headless.mjs --iters 100 --headed --gpu --out ../results/laptop-gpu.json  # zusätzlich iGPU (WebGL/WebGPU)
 ```

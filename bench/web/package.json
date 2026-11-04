@@ -4,9 +4,14 @@
   "version": "0.0.0",
   "description": "M0 benchmark harness (not the application). Runs inference-latency tests in a real Chromium.",
   "type": "module",
-  "scripts": { "bench": "node run-headless.mjs" },
+  "scripts": {
+    "bench": "node run-headless.mjs"
+  },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.2.2",
     "onnxruntime-web": "1.31.1"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
   }
 }
