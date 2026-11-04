@@ -7,8 +7,21 @@ const isolation = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
 };
 
+/** Sicherheits-Header für alle Antworten; Worker-/Vendor-Skripte erhalten eine strengere CSP ohne jede externe Verbindung (Telemetrie-Schutz). */
+function securityHeaders(): import('vite').Plugin {
+  const app = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' ws: wss: https://storage.googleapis.com; object-src 'none'; base-uri 'none'";
+  const worker = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; object-src 'none'";
+  const mw = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, next: () => void): void => {
+    const u = req.url ?? '';
+    res.setHeader('Content-Security-Policy', u.startsWith('/workers/') || u.startsWith('/vendor/') ? worker : app);
+    res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Content-Type-Options', 'nosniff');
+    next();
+  };
+  return { name: 'climbvision-security-headers', configureServer: (s) => { s.middlewares.use(mw); }, configurePreviewServer: (s) => { s.middlewares.use(mw); } };
+}
+
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), securityHeaders()],
   server: { host: '127.0.0.1', port: 5173, headers: isolation },
   preview: { host: '127.0.0.1', port: 4173, headers: isolation },
   build: { target: 'es2022', sourcemap: true },

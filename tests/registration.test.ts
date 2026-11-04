@@ -76,10 +76,15 @@ describe('Registrierung (Lucas–Kanade)', () => {
 });
 
 describe('Drift-Monitor (Anker)', () => {
-  const holds = segmentHolds(ref.img).polygons;
-  const anchors = selectAnchors(refGray, holds);
+  const anchors = selectAnchors(refGray);
   const shift = (dxPx: number, dyPx: number): Gray => warpGrayBy(refGray, (x, y) => [x - dxPx, y - dyPx]);
-  it('wählt verteilte Anker außerhalb von Griffen', () => {
+  it('dichte Wand (500 Griffe, 1600×1280): Ankerwahl schnell (< 500 ms) und ≥ 12 Anker – Regression gegen O(Griffe × Kandidaten)', () => {
+    const big = newGray(1600, 1280); for (let i = 0; i < big.data.length; i++) big.data[i] = 40 + ((i * 2654435761) % 97) / 3;
+    for (let r = 0; r < 25; r++) for (let c = 0; c < 20; c++) { const cx = Math.round(((c + 0.5) / 20) * 1600), cy = Math.round(((r + 0.5) / 25) * 1280); for (let y = cy - 14; y <= cy + 14; y++) for (let x = cx - 16; x <= cx + 16; x++) big.data[y * 1600 + x] = 200; }
+    const t0 = performance.now(); const a = selectAnchors(big);
+    expect(performance.now() - t0).toBeLessThan(500); expect(a.length).toBeGreaterThanOrEqual(12);
+  });
+  it('wählt verteilte Anker (je Zelle höchstens einen)', () => {
     expect(anchors.length).toBeGreaterThanOrEqual(8);
     for (const a of anchors) expect(a.u > 0 && a.u < 1 && a.v > 0 && a.v < 1).toBe(true);
     expect(new Set(anchors.map((a) => `${Math.floor(a.u * 4)}-${Math.floor(a.v * 4)}`)).size).toBe(anchors.length);
@@ -112,5 +117,14 @@ describe('Drift-Monitor (Anker)', () => {
   it('leeres/gleichförmiges Bild liefert keine gültigen Anker-Treffer', () => {
     const flat = newGray(W, H); flat.data.fill(100);
     expect(measureDrift(anchors, flat).status).toBe('verloren');
+  });
+});
+
+describe('Ampel ohne auswertbare Griffe', () => {
+  it('Referenz-Kontrast 0 (noch keine Griffe) → Kriterium neutral, gute NCC bleibt grün', () => {
+    const q = assessRegistration({ ncc: 0.9, nccVorher: 0.5, eckverschiebung: 0.002, quadrantNcc: [0.9, 0.9, 0.9, 0.9], griffKontrastNeu: 0, griffKontrastRef: 0, konvergiert: true });
+    expect(q.ampel).toBe('gruen');
+    const bad = assessRegistration({ ncc: 0.2, nccVorher: 0.2, eckverschiebung: 0.002, quadrantNcc: [0.1, 0.1, 0.1, 0.1], griffKontrastNeu: 0, griffKontrastRef: 0, konvergiert: true });
+    expect(bad.ampel).toBe('rot');
   });
 });

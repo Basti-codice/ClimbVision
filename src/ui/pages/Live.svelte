@@ -99,7 +99,7 @@
       </div>
       <div class="pip" class:focus={s.cameraFocus} style:display={s.showCamera && live.source ? 'block' : 'none'} style:left={s.cameraFocus ? '0' : pip.x + 'px'} style:top={s.cameraFocus ? '0' : pip.y + 'px'} style:width={s.cameraFocus ? '100%' : pip.w + 'px'} style:height={s.cameraFocus ? '100%' : 'auto'}>
         {#if !s.cameraFocus}<div class="grip" onpointerdown={pipDown} onpointermove={pipMove} onpointerup={() => (dragging = null)} role="presentation">Kamera {live.armLock ? '– Person anklicken' : ''}</div>{/if}
-        <div class="vid" class:arm={live.armLock} bind:this={pipHost} onclick={pipClick} role="presentation"></div>
+        <div class="vid" class:arm={live.armLock} style:aspect-ratio={live.source && !s.cameraFocus ? `${live.source.info().width || 16} / ${live.source.info().height || 9}` : undefined} bind:this={pipHost} onclick={pipClick} role="presentation"></div>
         <canvas bind:this={overlay} class="ov"></canvas>
       </div>
     {/if}
@@ -126,7 +126,7 @@
   .wall { position: absolute; inset: 0; } .wall.small { inset: auto 12px 12px auto; width: 300px; height: 240px; z-index: 5; border: 1px solid var(--c-border); background: #05070a; }
   .pip { position: absolute; z-index: 4; background: #000; border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden; box-shadow: var(--elev-2); resize: horizontal; min-width: 180px; max-width: 90%; }
   .pip.focus { border-radius: 0; border: none; resize: none; z-index: 1; } .grip { cursor: move; font-size: 12px; padding: 4px 8px; background: var(--c-surface2); color: var(--c-textMuted); user-select: none; }
-  .vid { position: relative; background: #000; aspect-ratio: 16 / 9; } .pip.focus .vid { aspect-ratio: auto; height: 100%; } .vid.arm { cursor: crosshair; outline: 3px solid var(--c-warn); outline-offset: -3px; }
+  .vid { position: relative; background: #000; aspect-ratio: 16 / 9; max-height: 46vh; } .pip.focus .vid { aspect-ratio: auto; height: 100%; } .vid.arm { cursor: crosshair; outline: 3px solid var(--c-warn); outline-offset: -3px; }
   .ov { position: absolute; left: 0; right: 0; bottom: 0; top: 24px; width: 100%; height: calc(100% - 24px); pointer-events: none; } .pip.focus .ov { top: 0; height: 100%; }
   .notice { padding: 8px 12px; border: 1px solid var(--c-warn); color: var(--c-warn); border-radius: var(--radius-2); background: color-mix(in srgb, var(--c-warn) 8%, transparent); } .notice.err { border-color: var(--c-error); color: var(--c-error); }
   .empty.big, .empty.over { margin: 24px; } .empty.over { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); background: var(--c-surface); z-index: 2; }

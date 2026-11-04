@@ -12,7 +12,6 @@ import { Esp32Service } from './esp32';
 import { CvClient } from './cv';
 import { bitmapToRgba, blobToBytes, rgbaToImageBitmap } from './imageio';
 import { migrate } from '../core/migrate';
-import { anchorsFor } from './wizard';
 import { selectAnchors, type Anchor } from '../registration/drift';
 import { toGray } from '../image/raster';
 
@@ -45,8 +44,8 @@ class AppState {
   profile = $state<WallProfile | null>(null);
   holds = $state<Hold[]>([]);
   routes = $state<Route[]>([]);
-  rect = $state<Rgba | null>(null);          // entzerrtes Referenzbild
-  rectBitmap = $state<ImageBitmap | null>(null);
+  rect = $state.raw<Rgba | null>(null);          // entzerrtes Referenzbild (groß → nicht tief reaktiv, übertragbar)
+  rectBitmap = $state.raw<ImageBitmap | null>(null);
   sessions = $state<SessionDoc[]>([]);
   mapping = $state<LedMapping>(defaultMapping(300));
   toasts = $state<Toast[]>([]);
@@ -57,6 +56,8 @@ class AppState {
   stats = $state<EngineStats | null>(null);
   renderFps = $state(0);
   live = $state(false);
+  /** Von Bibliotheken versuchte externe Anfragen, die der Netzwerkwächter abgewehrt hat (Datenschutz-Anzeige). */
+  blockedExternal = $state<{ count: number; last: string }>({ count: 0, last: '' });
 
   store!: Store;
   cv = new CvClient();
@@ -92,7 +93,6 @@ class AppState {
   async selectProfile(id: string): Promise<void> {
     const p = await this.store.getProfile(id);
     if (!p) return;
-    this.profile = p;
     await this.store.setSetting('activeProfile', id);
     const h = await this.store.getHolds(id);
     this.holds = h?.griffe ?? [];
@@ -106,11 +106,15 @@ class AppState {
     } else { this.rect = null; this.rectBitmap = null; }
     this.registration = { ampel: 'unbekannt', h: null, quality: p.registrierung.letzte_qualitaet };
     this.recomputeAnchors();
+    this.profile = p; // zuletzt setzen: abhängige Seiten sehen konsistente Griffe/Bilder
   }
 
-  recomputeAnchors(): void {
-    this.anchors = this.rect ? selectAnchors(toGray(this.rect), this.holds.map((h) => h.polygon)) : [];
-    void anchorsFor; // (Ankerliste wird nicht persistiert; Patches entstehen aus dem Referenzbild)
+  private anchorsDirty = true;
+  /** Anker werden nur bei Bedarf (Live/Drift-Monitor) berechnet und gecacht – nicht bei jedem Editor-Autosave. */
+  recomputeAnchors(): void { this.anchorsDirty = true; }
+  ensureAnchors(): Anchor[] {
+    if (this.anchorsDirty) { this.anchors = this.rect ? selectAnchors(toGray(this.rect)) : []; this.anchorsDirty = false; }
+    return this.anchors;
   }
 
   /** Nach dem Setup ist die Aufstellung identisch zur Referenz → Registrierung gilt als bestanden. */

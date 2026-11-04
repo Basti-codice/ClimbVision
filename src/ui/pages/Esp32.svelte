@@ -10,6 +10,8 @@
 
   let kind = $state<TransportKind>('virtual'); let busy = $state(false); let st = $state<TransportStatus>(app.esp.status); let stopPattern = $state<(() => void) | null>(null);
   let log = $state<VirtualLogEntry[]>([]); let ledCanvas = $state<HTMLCanvasElement>(); let raf = 0; let filter = $state(''); let warn = $state<string[]>([]);
+  let tick = $state(0); // Anstoß für Teile, die von nicht-reaktiven Feldern des Dienstes abhängen (virtueller ESP32)
+  const virt = $derived.by(() => { void tick; return app.esp.virtual; });
   const m = $derived(app.mapping);
   const connected = $derived(st.state === 'verbunden');
   const BLE = typeof navigator !== 'undefined' && 'bluetooth' in navigator, SER = typeof navigator !== 'undefined' && 'serial' in navigator;
@@ -17,21 +19,21 @@
   const unmapped = $derived(app.holds.filter((h) => !(h.id in m.map)).length);
 
   onMount(() => {
-    app.esp.onStatus = (s) => { st = s; };
-    const loop = (): void => { raf = requestAnimationFrame(loop); const v = app.esp.virtual; if (v) { if (log.length !== v.log.length) log = v.log.slice(-60); drawLeds(); } };
+    app.esp.onStatus = (s) => { st = s; tick++; };
+    const loop = (): void => { raf = requestAnimationFrame(loop); const v = virt; if (v) { if (log.length !== v.log.length) log = v.log.slice(-60); drawLeds(); } };
     raf = requestAnimationFrame(loop);
   });
   onDestroy(() => { cancelAnimationFrame(raf); stopPattern?.(); });
 
   function drawLeds(): void {
-    const c = ledCanvas, v = app.esp.virtual; if (!c || !v) return; const n = m.ledCount, cols = Math.min(60, n), rows = Math.ceil(n / cols), s = 12;
+    const c = ledCanvas, v = virt; if (!c || !v) return; const n = m.ledCount, cols = Math.min(60, n), rows = Math.ceil(n / cols), s = 12;
     c.width = cols * s; c.height = rows * s; const g = c.getContext('2d') as CanvasRenderingContext2D; g.fillStyle = '#05070a'; g.fillRect(0, 0, c.width, c.height);
     for (let i = 0; i < n; i++) { g.fillStyle = '#1a2027'; g.beginPath(); g.arc((i % cols) * s + s / 2, Math.floor(i / cols) * s + s / 2, 3.5, 0, 7); g.fill(); }
     for (const p of v.leds) { g.fillStyle = `rgb(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]})`; g.shadowColor = g.fillStyle; g.shadowBlur = 8; g.beginPath(); g.arc((p.led % cols) * s + s / 2, Math.floor(p.led / cols) * s + s / 2, 4.5, 0, 7); g.fill(); g.shadowBlur = 0; }
   }
   async function connect(): Promise<void> {
     busy = true;
-    try { await app.esp.connect(kind, { url: app.settings.esp32Url }); app.toast(kind === 'virtual' ? 'Virtueller ESP32 verbunden.' : 'Verbunden.', 'ok'); }
+    try { await app.esp.connect(kind, { url: app.settings.esp32Url }); tick++; app.toast(kind === 'virtual' ? 'Virtueller ESP32 verbunden.' : 'Verbunden.', 'ok'); }
     catch (e) { app.error(e); } finally { busy = false; }
   }
   function disconnect(): void { stopPattern?.(); stopPattern = null; app.esp.disconnect(); }
@@ -80,12 +82,12 @@
       <label for="lc">Anzahl LEDs</label><input id="lc" type="number" min="1" max="4000" value={m.ledCount} onchange={(e) => { app.mapping = { ...m, ledCount: Math.max(1, Number((e.target as HTMLInputElement).value) || 300) }; void save(); }} />
     </section>
 
-    {#if app.esp.virtual}
+    {#if virt}
       <section class="panel wide"><h2>Virtueller ESP32</h2>
         <canvas bind:this={ledCanvas} class="leds" aria-label="LED-Streifen (simuliert)"></canvas>
-        <div class="row"><div><label for="lat">Simulierte Latenz (ms)</label><input id="lat" type="number" min="0" max="2000" value={app.esp.virtual.latencyMs} onchange={(e) => { app.esp.virtual!.latencyMs = Number((e.target as HTMLInputElement).value) || 0; }} /></div>
-          <div><label for="dr">Paketverlust (%)</label><input id="dr" type="number" min="0" max="100" value={app.esp.virtual.dropRate * 100} onchange={(e) => { app.esp.virtual!.dropRate = (Number((e.target as HTMLInputElement).value) || 0) / 100; }} /></div>
-          <button class="sm" onclick={() => app.esp.virtual?.simulateDrop()}>Verbindung unterbrechen</button><button class="sm" onclick={() => app.esp.virtual?.simulateRecover()}>Wiederherstellen</button><span class="badge">verpasste seq: {app.esp.virtual.missed}</span></div>
+        <div class="row"><div><label for="lat">Simulierte Latenz (ms)</label><input id="lat" type="number" min="0" max="2000" value={virt.latencyMs} onchange={(e) => { virt.latencyMs = Number((e.target as HTMLInputElement).value) || 0; }} /></div>
+          <div><label for="dr">Paketverlust (%)</label><input id="dr" type="number" min="0" max="100" value={virt.dropRate * 100} onchange={(e) => { virt.dropRate = (Number((e.target as HTMLInputElement).value) || 0) / 100; }} /></div>
+          <button class="sm" onclick={() => virt.simulateDrop()}>Verbindung unterbrechen</button><button class="sm" onclick={() => virt.simulateRecover()}>Wiederherstellen</button><span class="badge">verpasste seq: {virt.missed}</span></div>
         <div class="logbox mono" role="log" aria-label="Nachrichtenprotokoll">{#each log as e, i (i)}<div class={e.dir}><span>{e.dir === 'tx' ? '→' : '←'} {e.bytes} B</span> {e.text}</div>{/each}</div>
       </section>
     {/if}

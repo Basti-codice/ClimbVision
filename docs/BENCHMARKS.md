@@ -285,3 +285,21 @@ Die Genauigkeitsschwellen sind **Vorschläge ohne empirische Basis** – wir kal
 - **Sekundär (Original nicht lesbar):** Kletter-Vergleich MediaPipe/ViTPose/YOLOv8-pose.
 - **Geschätzt:** alles auf deinem Laptop.
 - **Offen/Blockiert:** RTMPose-Browserlatenz, SAM-Varianten, iGPU, Kamera, Genauigkeit.
+
+
+---
+
+## 10. Nachtrag: in der fertigen App gemessen [CLOUD] (E2E-Lauf, `scripts/e2e.mjs`)
+
+Gleiche Cloud-VM wie oben (4 vCPU, **Software-Rendering**, headless Chromium, Videodatei 720×1280 @ 15 fps als Quelle). **Nicht auf den Laptop übertragbar**; nur Größenordnungen.
+
+| Messung | Wert | Bemerkung |
+|---|---|---|
+| Griff-Scan (klassisch), 1200 px Bild, Kilter-Foto | 0,7–1,0 s Segmentierung, 485 Kandidaten | im Worker; Vitest 913 ms auf 1060×1290 |
+| Registrierung (Lucas–Kanade, 800 px) | 238–334 ms, NCC 0,87, Eckverschiebung 0,05 % | identische Aufstellung |
+| Pose-Inferenz in der App (Lite, Worker) | 48–97 ms pro Frame | Rate 2–8,5 Hz im 2-s-Fenster; Videoquelle 15 fps, Frames werden bei belegtem Worker verworfen |
+| Hand-ROI (Worker) | 100–184 ms, 0,5–6 Hz | auf Ausschnitt, Rate begrenzt |
+| Render-FPS (Wandkarte, 485 Griffe, PiP) | 38–59 FPS | Software-Canvas, **kein** Hinweis auf echte GPU-Leistung |
+| Kontaktlogik | < 2 ms/Frame für 400 Griffe × 4 Gliedmaßen | Unit-Test mit Schwellwert (Ziel, nicht Latenzmessung) |
+
+Außerdem: Aufnahmegröße 1 h bei 15 Hz < 30 MB (Test mit Schwellwert). **Es gibt weiterhin keine Genauigkeitsmessung** (keine Kletter-Videos).

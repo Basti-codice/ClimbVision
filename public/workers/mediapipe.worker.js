@@ -7,6 +7,19 @@
  * Antworten: {type:'ready'} | {type:'result', id, t, ms, poses:[{keypoints:[{x,y,c}], score}] | hands:[...]} | {type:'error', message}
  */
 'use strict';
+/* NETZWERKWÄCHTER (Datenschutz): MediaPipe Tasks Vision sendet Nutzungs-Logs an odml.pa.googleapis.com (im E2E-Test beobachtet:
+ * POST /v1/log). ClimbVision verbietet jede externe Anfrage. Alles außer same-origin wird hier abgelehnt und gezählt; zusätzlich
+ * setzt der Server eine strikte CSP für dieses Skript. Der Zähler wird in der UI angezeigt. */
+(function guard() {
+  const origin = self.location.origin; let n = 0;
+  const same = (u) => { try { return new URL(u, self.location.href).origin === origin; } catch (e) { return false; } };
+  const note = (u) => { n++; try { self.postMessage({ type: 'blocked', url: String(u).replace(/^https?:\/\//, '').slice(0, 60), count: n }); } catch (e) { /* egal */ } };
+  const realFetch = self.fetch.bind(self);
+  self.fetch = function (input, init) { const u = typeof input === 'string' ? input : (input && input.url) || String(input); if (!same(u)) { note(u); return Promise.reject(new TypeError('ClimbVision: externe Anfrage blockiert (' + u.slice(0, 40) + ')')); } return realFetch(input, init); };
+  if (self.XMLHttpRequest) { const open = self.XMLHttpRequest.prototype.open; self.XMLHttpRequest.prototype.open = function (m, u) { if (!same(u)) { note(u); throw new Error('ClimbVision: externe Anfrage blockiert'); } return open.apply(this, arguments); }; }
+  if (self.navigator && typeof self.navigator.sendBeacon === 'function') { try { self.navigator.sendBeacon = function (u) { note(u); return false; }; } catch (e) { /* schreibgeschützt */ } }
+  if (self.WebSocket) { self.WebSocket = function (u) { note(u); throw new Error('ClimbVision: WebSocket im Worker nicht erlaubt'); }; }
+})();
 let lm = null, kind = null, mode = 'VIDEO', lastTs = 0;
 self.onmessage = async (e) => {
   const d = e.data;

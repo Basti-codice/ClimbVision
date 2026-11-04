@@ -6,6 +6,31 @@ Dieses Dokument ist so geschrieben, dass M1 ohne neue Grundsatzdiskussion starte
 
 ---
 
+## 0. Umsetzungsstand (nach deiner Freigabe: M1–M6 in einem Durchgang) – Abweichungen vom Plan
+
+Stand 2026-11-04. Alles unten ist in der Cloud-Umgebung gebaut und getestet (130 Unit-/Integrationstests, ein Chromium-E2E-Lauf mit deinem Wandfoto + synthetischem Video). **Nichts davon ist auf echter Hardware, mit echter Kamera oder echten Kletterbewegungen getestet.** M7 (P2) wurde nicht begonnen.
+
+| M | Status | Nicht/anders umgesetzt |
+|---|---|---|
+| M1 Grundgerüst | fertig | Tokens in CSS + TS, CVD-/Kontrasttests, Quellen (Kamera, Videodatei), HUD, IndexedDB, i18n (DE vollständig, EN Gerüst) |
+| M2 Kalibrierung | fertig | **kein opencv.js**: eigene Lucas–Kanade-Registrierung (D5 revidiert); keine ArUco-Marker; Homographie auf *normalisierten* Bildkoordinaten (auflösungsunabhängig) |
+| M3 Scan/Editor | fertig | **kein MobileSAM** (Gewichte im Sandbox-Netz nicht erreichbar, auf deinem Foto nicht nötig); stattdessen klassisches Verfahren + **Zauberstab** im Editor. Auf deinem Foto: ≈ 485 Kandidaten, Reflexionsband teilweise falsch |
+| M4 Live | fertig | MediaPipe Lite/Full + Hand-ROI; **Pipeline läuft im Main-Thread** (Kontaktlogik < 2 ms/Frame, gemessen), Pose/Hand/Segmentierung/Registrierung in Workern |
+| M5 Sessions | fertig | Aufnahme (Binär-Chunks), Replay/Scrubbing/Zeitlupe, Auswertungen (2D-Näherungen), Routen, Versuche, Ghost-Overlay (einfach), Export JSON/CSV/ZIP/PNG/Overlay-Video |
+| M6 ESP32 | App fertig, **Firmware ungetestet** | Transporte WS/BLE/Serial (nur mit Fake-/Virtual-Geräten getestet), Mapping-Editor, virtueller ESP32; Firmware nie kompiliert |
+
+Wesentliche Änderungen gegenüber dem Plan (mit Grund):
+1. **Telemetrie in MediaPipe entdeckt** (`POST odml.pa.googleapis.com/v1/log`) → Netzwerkwächter im Worker + strikte CSP + E2E-Test (README).
+2. **Drift-Anker dürfen auf Griffen liegen**: Auf dichten Wänden (Kilter) gibt es keine freie Wandfläche; Griffe sind statisch und liefern die besten Kanten.
+3. **Kontaktlogik:** Geschwindigkeit wird über ein 250-ms-Fenster geschätzt (Rauschen) und blockiert nur den *Start*, nicht das Halten (sonst beendet schnelles Greifen/Zucken Kontakte); `c_min` nicht doppelt gezählt (steckt in `s_pos`). Beide Korrekturen kamen aus fehlgeschlagenen Tests.
+4. **Segmentierungs-Polarität:** Streuungsregel statt „Minderheitsklasse“ (versagt bei dichten Wänden, wo Griffe > 50 % der Fläche bedecken).
+5. **BLE-Binärpaket ist Pflicht** für Zustände (JSON passt nicht in 20 Byte).
+6. **Gefundene und behobene Fehlerklassen:** Svelte-`$state`-Proxys lassen sich weder in IndexedDB noch per `postMessage` klonen → Normalisierung im Speicher-Layer, Schnappschüsse vor Worker-Aufrufen; `$effect`-Endlosschleife im Editor; O(n²)-Ankerwahl (Minuten → 64 ms).
+
+Offene Qualitätsfragen (nur mit deinen echten Daten beantwortbar): Pose-Rate auf dem Laptop, Fuß-/Heel-Hook-Qualität, Kontaktgenauigkeit, Pixel-Webcam-Latenz, Kamera-/Bewegungs-Registrierung in der Halle, ESP32-Hardware.
+
+---
+
 ## 1. Kurzfassung
 
 1. **Machbar, aber nicht so, wie die Spec es suggeriert.** Der Browser-Stack (Vite + TS + Svelte + MediaPipe/ONNX in Web Workern) ist tragfähig. Das schwierige Stück ist nicht Pose, sondern **Griff-Kontakt-Zuordnung bei verdeckten Händen/Füßen** – dafür gibt es keine fertige Lösung, nur Hobby-Repos und eine Handvoll Paper.

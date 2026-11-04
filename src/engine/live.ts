@@ -13,7 +13,7 @@ export interface EngineOptions {
   /** true (Standard): Engine startet/stoppt die Quelle selbst. false: Quelle läuft bereits (Vorschau) und bleibt nach stop() offen. */
   ownsSource?: boolean;
   onOutput: (o: FrameOutput, frame: { width: number; height: number }) => void;
-  onStats?: (s: EngineStats) => void; onError?: (m: string) => void; swapLeftRight?: boolean;
+  onStats?: (s: EngineStats) => void; onError?: (m: string) => void; onBlocked?: (count: number, url: string) => void; swapLeftRight?: boolean;
 }
 
 type PoseRes = { type: 'result'; id: number; t: number; ms: number; poses?: PoseCandidate[]; hands?: HandCandidate[] };
@@ -38,7 +38,7 @@ export class LiveEngine {
   private spawn(kind: 'pose' | 'hand', model: ArrayBuffer): Promise<Worker> {
     return new Promise((resolve, reject) => {
       const w = new Worker('/workers/mediapipe.worker.js'); // classic (importScripts)
-      w.onmessage = (e: MessageEvent<{ type: string; message?: string }>) => { if (e.data.type === 'ready') resolve(w); else if (e.data.type === 'error') reject(new Error(e.data.message)); };
+      w.onmessage = (e: MessageEvent<{ type: string; message?: string; count?: number; url?: string }>) => { if (e.data.type === 'ready') resolve(w); else if (e.data.type === 'error') reject(new Error(e.data.message)); else if (e.data.type === 'blocked') this.o.onBlocked?.(e.data.count ?? 0, e.data.url ?? ''); };
       w.onerror = (e) => reject(new Error(e.message || 'Worker-Fehler'));
       w.postMessage({ type: 'init', kind, model: model.slice(0), base: this.o.base ?? '/vendor/mediapipe', delegate: this.o.delegate ?? 'CPU', numPoses: this.o.numPoses ?? 1, numHands: 2, mode: kind === 'pose' ? 'VIDEO' : 'IMAGE' });
     });
@@ -46,9 +46,9 @@ export class LiveEngine {
 
   async start(): Promise<void> {
     this.pose = await this.spawn('pose', this.o.poseModel);
-    this.pose.onmessage = (e: MessageEvent<PoseRes | { type: 'error'; message: string }>) => this.onPose(e.data);
+    this.pose.onmessage = (e: MessageEvent<PoseRes | { type: 'error'; message: string } | { type: 'blocked'; count: number; url: string }>) => { if (e.data.type === 'blocked') this.o.onBlocked?.(e.data.count, e.data.url); else this.onPose(e.data); };
     if (this.o.handModel) {
-      try { this.hand = await this.spawn('hand', this.o.handModel); this.hand.onmessage = (e: MessageEvent<PoseRes | { type: 'error'; message: string }>) => this.onHand(e.data); }
+      try { this.hand = await this.spawn('hand', this.o.handModel); this.hand.onmessage = (e: MessageEvent<PoseRes | { type: 'error'; message: string } | { type: 'blocked'; count: number; url: string }>) => { if (e.data.type === 'blocked') this.o.onBlocked?.(e.data.count, e.data.url); else this.onHand(e.data); }; }
       catch (e) { this.o.onError?.(`Hand-Tracking nicht verfügbar: ${(e as Error).message}`); this.hand = null; }
     }
     this.off = this.o.source.onFrame((f) => this.onFrame(f));

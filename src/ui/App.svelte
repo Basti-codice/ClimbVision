@@ -13,7 +13,11 @@
   import Settings from './pages/Settings.svelte';
 
   const NAV: [Page, string, string][] = [['start', 'nav.start', '1'], ['live', 'nav.live', '2'], ['scan', 'nav.scan', '3'], ['sessions', 'nav.sessions', '4'], ['esp32', 'nav.esp32', '5'], ['settings', 'nav.settings', '6']];
-  onMount(() => { void app.init().catch((e) => app.error(e, 'Start fehlgeschlagen: ')); });
+  onMount(() => {
+    // Diagnose-Hook (nur mit ?debug in der URL): Zustand im Browser-Konsolenzugriff, z. B. für E2E-Tests
+    if (new URLSearchParams(location.search).has('debug')) (window as unknown as Record<string, unknown>)['__cv'] = { app, live };
+    void app.init().catch((e) => app.error(e, 'Start fehlgeschlagen: '));
+  });
   $effect(() => { document.documentElement.classList.toggle('hc', app.settings.highContrast); });
 
   function key(e: KeyboardEvent): void {

@@ -1,7 +1,5 @@
 /** Live-Drift-Überwachung: Anker-Patches im Wandraum per NCC-Template-Matching nachverfolgen. */
 import { downscale, newGray, type Gray } from '../image/raster';
-import { pointInPolygon } from '../geometry/polygon';
-import type { Vec2 } from '../geometry/homography';
 
 export interface Anchor { u: number; v: number; patch: Float32Array; size: number }
 export interface DriftMeasure {
@@ -24,28 +22,27 @@ function patchAt(g: Gray, cx: number, cy: number, s: number): Float32Array | nul
 }
 const variance = (a: Float32Array): number => { let m = 0; for (const v of a) m += v; m /= a.length; let q = 0; for (const v of a) q += (v - m) ** 2; return q / a.length; };
 
-/** Wählt bis zu cells×cells texturreiche Anker außerhalb von Griffen (gleichmäßig verteilt). */
-export function selectAnchors(ref: Gray, holds: readonly (readonly Vec2[])[], opt: { cells?: number; size?: number; workWidth?: number } = {}): Anchor[] {
+/**
+ * Wählt bis zu cells×cells texturreiche Anker (gleichmäßig verteilt, je Zelle der kontrastreichste Patch).
+ * Griffe werden bewusst NICHT ausgeschlossen: Auf dichten Wänden (z. B. Kilter-Board) gibt es kaum freie Wandfläche,
+ * Griffe sind während einer Session statisch und liefern die besten Kanten. Verdeckung durch die Person wird über Masken-Boxen behandelt.
+ */
+export function selectAnchors(ref: Gray, opt: { cells?: number; size?: number; workWidth?: number } = {}): Anchor[] {
   const cells = opt.cells ?? 4, size = opt.size ?? 24;
   const f = Math.max(1, ref.width / (opt.workWidth ?? 512));
   const g = downscale(ref, f);
+  const W = g.width, H = g.height;
   const out: Anchor[] = [];
   for (let cy = 0; cy < cells; cy++)
     for (let cx = 0; cx < cells; cx++) {
       let best: Anchor | null = null, bestVar = 20; // Mindesttextur
-      const x0 = (cx / cells) * g.width, x1 = ((cx + 1) / cells) * g.width, y0 = (cy / cells) * g.height, y1 = ((cy + 1) / cells) * g.height;
+      const x0 = (cx / cells) * W, x1 = ((cx + 1) / cells) * W, y0 = (cy / cells) * H, y1 = ((cy + 1) / cells) * H;
       for (let y = y0 + size; y < y1 - size; y += 6)
         for (let x = x0 + size; x < x1 - size; x += 6) {
-          const nearHold = holds.some((h) => {
-            // Patch-Ecken und Mitte dürfen in keinem Griff liegen
-            const pts: Vec2[] = [[x, y], [x - size / 2, y - size / 2], [x + size / 2, y - size / 2], [x - size / 2, y + size / 2], [x + size / 2, y + size / 2]];
-            return pts.some((p) => pointInPolygon([p[0] / g.width, p[1] / g.height], h));
-          });
-          if (nearHold) continue;
           const p = patchAt(g, x, y, size);
           if (!p) continue;
           const v = variance(p);
-          if (v > bestVar) { bestVar = v; best = { u: x / g.width, v: y / g.height, patch: p, size }; }
+          if (v > bestVar) { bestVar = v; best = { u: x / W, v: y / H, patch: p, size }; }
         }
       if (best) out.push(best);
     }

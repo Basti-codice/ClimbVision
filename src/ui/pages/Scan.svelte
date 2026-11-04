@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { app } from '../../app/state.svelte';
   import WallMap from '../WallMap.svelte';
   import type { WallPointer } from '../wallTypes';
@@ -25,7 +25,8 @@
   let preset = $state<'standard' | 'klein' | 'dicht'>('standard'); let polarity = $state<'auto' | 'hell' | 'dunkel'>('auto');
   let wandTol = $state(28); let minRel = $state(0.2); let maxRel = $state(6); let showIds = $state(true); let saveTimer: number | undefined; let lastInfo = $state('');
 
-  $effect(() => { if (app.profile) { work = app.holds; hist = new History<Hold[]>(app.holds); selected = new Set(); version++; } });
+  // Nur beim Wechsel des Wandprofils neu laden (nicht bei jedem Autosave) – sonst würde der Undo-Verlauf zurückgesetzt
+  $effect(() => { const id = app.profile?.id; untrack(() => { if (id) { work = app.holds; hist = new History<Hold[]>(app.holds); selected = new Set(); version++; } }); });
   onDestroy(() => { cancel?.(); clearTimeout(saveTimer); void app.setHolds($state.snapshot(work) as Hold[]); });
 
   const PRESETS: Record<string, Partial<SegmentOptions>> = { standard: {}, klein: { minAreaFrac: 0.00003, localContrast: 4, openRadius: 1 }, dicht: { splitRel: 0.18, splitMinAbs: 1.0, openRadius: 2 } };

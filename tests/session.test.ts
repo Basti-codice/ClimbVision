@@ -189,6 +189,13 @@ describe('Speicher (IndexedDB)', () => {
     expect(await st.getChunk('s1-0')).toBeUndefined();
     expect((await st.listProfiles()).map((p) => p.id)).toEqual(['b']);
   });
+  it('akzeptiert Proxy-/Zustandsobjekte (Svelte $state ist nicht strukturklonbar) – Regression', async () => {
+    const db = await openDb('test-' + Math.random()); const st = new Store(db);
+    const p = new Proxy(profile('px'), {}); // Proxy lässt sich nicht per structuredClone kopieren
+    expect(() => structuredClone(p)).toThrow();
+    await st.putProfile(p); await st.setSetting('s', new Proxy({ a: [1, 2] }, {}));
+    expect((await st.getProfile('px'))!.id).toBe('px'); expect(await st.getSetting('s', null)).toEqual({ a: [1, 2] });
+  });
   it('lehnt Dokumente aus neuerer Version ab (nicht still lesen)', async () => {
     const db = await openDb('test-' + Math.random()); const st = new Store(db);
     await db.put('profiles', { ...profile('z'), schemaVersion: 99 } as never);

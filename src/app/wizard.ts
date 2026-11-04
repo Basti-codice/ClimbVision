@@ -4,7 +4,6 @@ import { warpToWall, type Rgba } from '../image/raster';
 import type { WallProfile, RegistrierungsQualitaet } from '../core/schemas';
 import { selectAnchors } from '../registration/drift';
 import { toGray } from '../image/raster';
-import type { Polygon } from '../geometry/polygon';
 
 export const RECT_LONG_EDGE = 1600;
 
@@ -55,8 +54,8 @@ export function createProfile(i: NewProfileInput): { profile: WallProfile; rect:
 }
 
 /** Anker für den Live-Drift-Monitor aus dem Referenzbild (außerhalb von Griffen). */
-export function anchorsFor(rect: Rgba, holds: readonly Polygon[]): { u: number; v: number }[] {
-  return selectAnchors(toGray(rect), holds).map((a) => ({ u: a.u, v: a.v }));
+export function anchorsFor(rect: Rgba): { u: number; v: number }[] {
+  return selectAnchors(toGray(rect)).map((a) => ({ u: a.u, v: a.v }));
 }
 
 /** Kombiniert die Homographie der neuen Ecken mit der Rest-Verschiebung aus der Registrierung. hRes: Template(ref) → neues entzerrtes Bild. */

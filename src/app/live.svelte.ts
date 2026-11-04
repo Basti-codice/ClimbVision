@@ -87,14 +87,19 @@ class LiveController {
 
   /** Schritt 2: Homographie aus den Ecken, Entzerrung, bildbasierte Verfeinerung + Plausibilität. */
   async finishRegistration(): Promise<void> {
-    const p = app.profile, img = this.regImage; if (!p || !img || this.regCorners.length !== 4 || !app.rect) return;
+    const p = app.profile, img = this.regImage;
+    if (!p || !img || !app.rect || this.regCorners.length !== 4) {
+      const grund = !p ? 'kein Wandprofil' : !img ? 'kein Kamerabild aufgenommen' : !app.rect ? 'das entzerrte Referenzbild fehlt (Wand im Setup neu anlegen)' : 'es sind nicht alle vier Ecken gesetzt';
+      app.toast(`Registrierung nicht möglich: ${grund}.`, 'err'); return;
+    }
     this.regPhase = 'rechnet'; this.busy = true;
     try {
       const h0 = normalizedHomography(this.regCorners, img.width, img.height);
       const sz = rectSize(p.aspekt, 800);
       const neu = rectify(img, h0, p.aspekt, 800);
       const ref = resizeRgba(app.rect, sz.w, sz.h);
-      const r = await app.cv.register(ref, neu, app.holds.map((h) => h.polygon), p.aspekt);
+      // Proxys (Svelte-$state) sind nicht an Worker übertragbar → Schnappschuss
+      const r = await app.cv.register(ref, neu, ($state.snapshot(app.holds) as typeof app.holds).map((h) => h.polygon), p.aspekt);
       const h = refinedHomography(h0, r.hRes);
       const v = verdict(r.quality);
       app.registration = { ampel: r.quality.ampel, h: v.freigabe ? h : null, quality: r.quality };
@@ -132,7 +137,7 @@ class LiveController {
       this.recorder = s.recordData ? new SessionRecorder((c, i) => void app.store.putChunk(`${sid}-${i}`, encodeChunk(c))) : null;
       this.engine = new LiveEngine({
         source: this.source as FrameSource, ownsSource: false, pipeline: this.pipeline, poseModel: pose, handModel: hand, delegate: s.delegate, handIntervalMs: s.handIntervalMs, swapLeftRight: s.swapLeftRight,
-        onOutput: (o) => this.onOutput(o), onStats: (st) => { app.stats = st; }, onError: (m) => app.toast(m, 'err'),
+        onOutput: (o) => this.onOutput(o), onStats: (st) => { app.stats = st; }, onError: (m) => app.toast(m, 'err'), onBlocked: (count, url) => { app.blockedExternal = { count: app.blockedExternal.count + 1, last: url }; void count; },
       });
       await this.engine.start();
       this.running = true; app.live = true; this.okStreak = 0; this.badStreak = 0; this.paused = false;
@@ -168,7 +173,8 @@ class LiveController {
   /** Drift-Überwachung: aktuelles Kamerabild entzerren und mit den Referenz-Ankern vergleichen. */
   private async checkDrift(): Promise<void> {
     const v = this.source?.element, h = app.registration.h, p = app.profile;
-    if (!v || !h || !p || !app.anchors.length || !v.videoWidth) return;
+    const anchors = app.ensureAnchors();
+    if (!v || !h || !p || !anchors.length || !v.videoWidth) return;
     try {
       const k = Math.min(1, 640 / v.videoWidth), w = Math.round(v.videoWidth * k), hh = Math.round(v.videoHeight * k);
       const c = new OffscreenCanvas(w, hh), g = c.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D; g.drawImage(v, 0, 0, w, hh);
@@ -176,7 +182,7 @@ class LiveController {
       const rect = rectify({ width: w, height: hh, data: img.data }, h, p.aspekt, 512);
       const sk = app.output?.skeleton; const boxes: [number, number, number, number][] = [];
       if (sk) { const pts = sk.filter((q): q is NonNullable<typeof q> => !!q && q.c > 0.3); if (pts.length) boxes.push([Math.min(...pts.map((q) => q.u)) - 0.08, Math.min(...pts.map((q) => q.v)) - 0.08, Math.max(...pts.map((q) => q.u)) + 0.08, Math.max(...pts.map((q) => q.v)) + 0.08]); }
-      const m = measureDrift(app.anchors, toGray(rect), { workWidth: 512, maskBoxes: boxes });
+      const m = measureDrift(anchors, toGray(rect), { workWidth: 512, maskBoxes: boxes });
       this.drift = m;
       if (m.status === 'verloren') { this.badStreak++; this.okStreak = 0; } else if (m.status === 'ok') { this.okStreak++; this.badStreak = 0; } else { this.badStreak = 0; this.okStreak = 0; }
       if (!this.paused && this.badStreak >= 2) { this.paused = true; this.pipeline?.setPaused(true); app.toast('Kamera scheinbar bewegt – Kontaktzuordnung pausiert. Bitte neu registrieren.', 'warn', 10000); }

@@ -17,7 +17,8 @@ export function assessRegistration(i: AssessInput): RegistrierungsQualitaet {
   const hinweise: string[] = [];
   const quadG = i.quadrantNcc.filter((q) => q >= THRESH.gruen.quadNcc).length;
   const quadY = i.quadrantNcc.filter((q) => q >= THRESH.gelb.quadNcc).length;
-  const kontrast = i.griffKontrastRef > 1e-6 ? i.griffKontrastNeu / i.griffKontrastRef : 0;
+  // Ohne auswertbare Griffe (Referenz-Kontrast ≈ 0, z. B. noch nicht gescannt) ist dieses Kriterium neutral – Registrierung stützt sich dann auf NCC/Quadranten.
+  const kontrast = i.griffKontrastRef > 1e-6 ? i.griffKontrastNeu / i.griffKontrastRef : 1;
   const grun = i.konvergiert && i.ncc >= THRESH.gruen.ncc && i.eckverschiebung <= THRESH.gruen.ecke && quadG >= THRESH.gruen.quad && kontrast >= THRESH.gruen.kontrast;
   const gelb = i.ncc >= THRESH.gelb.ncc && i.eckverschiebung <= THRESH.gelb.ecke && quadY >= THRESH.gelb.quad && kontrast >= THRESH.gelb.kontrast;
   if (!i.konvergiert) hinweise.push('Ausrichtung konvergierte nicht.');

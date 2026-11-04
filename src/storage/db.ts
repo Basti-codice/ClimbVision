@@ -29,6 +29,9 @@ export function openDb(name = DB_NAME): Promise<Db> {
   });
 }
 
+/** Dokumente sind JSON (Zod-validiert). Die JSON-Normalisierung entfernt Proxys (Svelte-$state ist nicht strukturklonbar) und ungültige Werte. */
+export const plain = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+
 export class Store {
   constructor(private readonly db: Db) {}
   /** Liest ein Dokument, migriert ggf. ältere Versionen und validiert. */
@@ -36,7 +39,7 @@ export class Store {
     const raw = await this.db.get(store, key);
     return raw === undefined ? undefined : (migrate(raw).doc as T);
   }
-  putProfile(p: WallProfile): Promise<string> { return this.db.put('profiles', p); }
+  putProfile(p: WallProfile): Promise<string> { return this.db.put('profiles', plain(p)); }
   getProfile(id: string): Promise<WallProfile | undefined> { return this.load('profiles', id); }
   async listProfiles(): Promise<WallProfile[]> { return (await this.db.getAll('profiles')).map((r) => migrate(r).doc as WallProfile).sort((a, b) => b.geaendert.localeCompare(a.geaendert)); }
   async deleteProfile(id: string): Promise<void> {
@@ -53,12 +56,12 @@ export class Store {
     const h = await this.getHolds(id); if (h) await this.putHolds({ ...h, wandId: newId });
     return np;
   }
-  putHolds(h: HoldsFile): Promise<string> { return this.db.put('holds', h); }
+  putHolds(h: HoldsFile): Promise<string> { return this.db.put('holds', plain(h)); }
   getHolds(wandId: string): Promise<HoldsFile | undefined> { return this.load('holds', wandId); }
-  putRoute(r: Route): Promise<string> { return this.db.put('routes', r); }
+  putRoute(r: Route): Promise<string> { return this.db.put('routes', plain(r)); }
   async listRoutes(wandId: string): Promise<Route[]> { return (await this.db.getAllFromIndex('routes', 'byWand', wandId)).map((r) => migrate(r).doc as Route); }
   deleteRoute(id: string): Promise<void> { return this.db.delete('routes', id); }
-  putSession(s: SessionDoc): Promise<string> { return this.db.put('sessions', s); }
+  putSession(s: SessionDoc): Promise<string> { return this.db.put('sessions', plain(s)); }
   getSession(id: string): Promise<SessionDoc | undefined> { return this.load('sessions', id); }
   async listSessions(wandId?: string): Promise<SessionDoc[]> {
     const all = wandId ? await this.db.getAllFromIndex('sessions', 'byWand', wandId) : await this.db.getAll('sessions');
@@ -69,7 +72,7 @@ export class Store {
   async getChunk(id: string): Promise<Uint8Array | undefined> { const b = await this.db.get('chunks', id); return b ? new Uint8Array(b) : undefined; }
   putBlob(id: string, mime: string, data: Uint8Array, sha256?: string): Promise<string> { return this.db.put('blobs', { id, mime, data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer, ...(sha256 ? { sha256 } : {}) }); }
   async getBlob(id: string): Promise<{ mime: string; data: Uint8Array; sha256?: string } | undefined> { const b = await this.db.get('blobs', id); return b ? { mime: b.mime, data: new Uint8Array(b.data), ...(b.sha256 ? { sha256: b.sha256 } : {}) } : undefined; }
-  setSetting(key: string, v: unknown): Promise<string> { return this.db.put('settings', v, key); }
+  setSetting(key: string, v: unknown): Promise<string> { return this.db.put('settings', plain(v), key); }
   getSetting<T>(key: string, fallback: T): Promise<T> { return this.db.get('settings', key).then((v) => (v === undefined ? fallback : (v as T))); }
   async estimateBytes(): Promise<number> { let n = 0; for (const b of await this.db.getAll('blobs')) n += b.data.byteLength; for (const k of await this.db.getAllKeys('chunks')) n += (await this.db.get('chunks', k))?.byteLength ?? 0; return n; }
 }
