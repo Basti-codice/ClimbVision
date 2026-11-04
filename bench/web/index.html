@@ -1,0 +1,65 @@
+<!doctype html><meta charset="utf-8"><title>bench</title><body>
+<script type="module">
+import { FilesetResolver, PoseLandmarker, HandLandmarker } from '/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
+import * as ort from '/node_modules/onnxruntime-web/dist/ort.min.mjs';
+
+const stats = a => { const s=[...a].sort((x,y)=>x-y); const m=a.reduce((p,c)=>p+c,0)/a.length;
+  return { n:a.length, mean:+m.toFixed(2), median:+s[s.length>>1].toFixed(2), p95:+s[Math.floor(s.length*0.95)].toFixed(2), min:+s[0].toFixed(2), max:+s[s.length-1].toFixed(2) }; };
+async function loadCanvas(url, w, h, fit = 'stretch') {
+  const img = new Image(); img.src = url; await img.decode();
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  if (fit === 'letterbox') { g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+    const k = Math.min(w / img.naturalWidth, h / img.naturalHeight), dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+    g.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh); }
+  else g.drawImage(img, 0, 0, w, h);
+  return c;
+}
+
+// ---- MediaPipe Tasks Vision (WASM, CPU delegate) ----
+window.benchMediaPipe = async ({ kind, model, img, w, h, fit, mode, warmup, iters, delegate = 'CPU' }) => {
+  const fileset = await FilesetResolver.forVisionTasks('/node_modules/@mediapipe/tasks-vision/wasm');
+  const Cls = kind === 'hand' ? HandLandmarker : PoseLandmarker;
+  const t0 = performance.now();
+  const lm = await Cls.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: model, delegate },
+    runningMode: mode === 'image' ? 'IMAGE' : 'VIDEO',
+    ...(kind === 'hand' ? { numHands: 2 } : { numPoses: 1 })
+  });
+  const initMs = performance.now() - t0;
+  const cv = await loadCanvas(img, w, h, fit);
+  let ts = 1000, hit = [], miss = [];
+  for (let i = 0; i < warmup + iters; i++) {
+    const t = performance.now();
+    const r = mode === 'image' ? lm.detect(cv) : lm.detectForVideo(cv, ts += 33);
+    const d = performance.now() - t;
+    if (i >= warmup) ((r.landmarks?.length ?? 0) > 0 ? hit : miss).push(d);
+  }
+  lm.close();
+  // IMPORTANT: latency is only meaningful for frames where a landmark was actually found (the full pipeline ran).
+  return { runtime: `mediapipe-tasks-vision/${delegate === 'GPU' ? 'webgl-gpu' : 'wasm-cpu'}`, kind, model, mode, img, input: `${w}x${h}/${fit}`, initMs: +initMs.toFixed(0),
+    hitRate: +(hit.length / iters).toFixed(2), msHit: hit.length ? stats(hit) : null, msMiss: miss.length ? stats(miss) : null };
+};
+
+// ---- ONNX Runtime Web (WASM / WebGPU) ----
+window.benchOrt = async ({ model, ep, threads, size, warmup, iters, simd = true }) => {
+  ort.env.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/';
+  ort.env.wasm.numThreads = threads;
+  const t0 = performance.now();
+  const sess = await ort.InferenceSession.create(model, { executionProviders: [ep], graphOptimizationLevel: 'all' });
+  const initMs = performance.now() - t0;
+  const name = sess.inputNames[0];
+  const data = new Float32Array(1 * 3 * size.h * size.w).map(() => Math.random());
+  const feeds = { [name]: new ort.Tensor('float32', data, [1, 3, size.h, size.w]) };
+  const times = [];
+  for (let i = 0; i < warmup + iters; i++) {
+    const t = performance.now(); await sess.run(feeds); const d = performance.now() - t;
+    if (i >= warmup) times.push(d);
+  }
+  return { runtime: `onnxruntime-web/${ep}`, model, threads, input: `${size.w}x${size.h}`, initMs: +initMs.toFixed(0),
+    crossOriginIsolated: self.crossOriginIsolated, ms: stats(times) };
+};
+window.benchReady = true;
+window.envInfo = () => ({ ua: navigator.userAgent, cores: navigator.hardwareConcurrency, crossOriginIsolated: self.crossOriginIsolated,
+  webgpu: !!navigator.gpu, offscreenCanvas: typeof OffscreenCanvas !== 'undefined', webnn: !!navigator.ml, sab: typeof SharedArrayBuffer !== 'undefined' });
+</script>

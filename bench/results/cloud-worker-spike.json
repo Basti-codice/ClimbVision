@@ -1,0 +1,9 @@
+{
+  "note": "Cloud VM (4 vCPU Xeon), Chromium 153 headless, MediaPipe tasks-vision 1.2.2 Lite/hand, VIDEO mode, ImageBitmap 1280x720 letterboxed (bus.jpg), 60 iters, 15 warm-up. Median/p95 ms. Spike scripts: bench/web/worker-spike.html, worker-classic.js, worker-module.mjs",
+  "moduleWorker": { "result": "error", "message": "ModuleFactory not set." },
+  "classicWorker": { "init": "ok", "offscreenCanvasInWorker": true, "crossOriginIsolated": true },
+  "poseLiteAlone": { "hitRate": 1, "median": 53.1, "p95": 62.0 },
+  "twoPoseLiteWorkersConcurrent": [ { "hitRate": 1, "median": 52.3, "p95": 61.5 }, { "hitRate": 1, "median": 54.1, "p95": 63.6 } ],
+  "poseLitePlusHandConcurrent_handNoHandPath": [ { "kind": "pose", "hitRate": 1, "median": 40.7, "p95": 55.6 }, { "kind": "hand", "hitRate": 0, "median": 52.7, "p95": 71.3 } ],
+  "threeConcurrent_pose_pose_hand": [ { "median": 51.4, "p95": 64.0 }, { "median": 38.3, "p95": 59.2 }, { "kind": "hand", "hitRate": 0, "median": 67.1, "p95": 98.0 } ]
+}

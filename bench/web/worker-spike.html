@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><title>worker spike</title><body><script type="module">
+const mkBitmap = async () => { const im = new Image(); im.src = '/fixtures/bus.jpg'; await im.decode(); const c = new OffscreenCanvas(1280, 720), g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 1280, 720); const k = Math.min(1280 / im.naturalWidth, 720 / im.naturalHeight); const dw = im.naturalWidth * k, dh = im.naturalHeight * k; g.drawImage(im, (1280 - dw) / 2, (720 - dh) / 2, dw, dh); return createImageBitmap(c); };
+const call = (w, msg, transfer = []) => new Promise((res) => { w.onmessage = (e) => { if (e.data.type !== 'ready' || msg.type === 'init') res(e.data); }; w.postMessage(msg, transfer); });
+window.spike = async () => {
+  const out = {};
+  // 1) module worker
+  try { const w = new Worker('/worker-module.mjs', { type: 'module' }); out.moduleWorker = await call(w, { model: '/models/pose_lite.task', bitmap: await mkBitmap() }); w.terminate(); } catch (e) { out.moduleWorker = { error: String(e) }; }
+  // 2) classic worker, ImageBitmap input, single instance
+  const mk = async (kind, model) => { const w = new Worker('/worker-classic.js'); const r = await call(w, { type: 'init', kind, model }); return { w, r }; };
+  const run = (w, iters = 60) => new Promise(async (res) => { w.onmessage = (e) => res(e.data); w.postMessage({ type: 'run', bitmap: await mkBitmap(), warmup: 15, iters }); });
+  try {
+    const p = await mk('pose', '/models/pose_lite.task'); out.classicInit = p.r;
+    out.poseAlone = await run(p.w);
+    // 3) pose + second pose instance concurrently (stand-in for pose+hand on separate cores)
+    const q = await mk('pose', '/models/pose_lite.task');
+    const [a, b] = await Promise.all([run(p.w), run(q.w)]); out.twoPoseWorkersConcurrent = [a, b];
+    const h = await mk('hand', '/models/hand.task');
+    const [c, d] = await Promise.all([run(p.w), run(h.w)]); out.poseAndHandConcurrent = [c, d];
+    const [e1, e2, e3] = await Promise.all([run(p.w), run(q.w), run(h.w)]); out.threeConcurrent = [e1, e2, e3];
+  } catch (e) { out.classicError = String(e); }
+  return out;
+};
+window.ready = true;
+</script>

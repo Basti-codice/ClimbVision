@@ -1,0 +1,261 @@
+{
+  "env": {
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+    "cores": 4,
+    "crossOriginIsolated": true,
+    "webgpu": true,
+    "offscreenCanvas": true,
+    "webnn": false,
+    "sab": true
+  },
+  "when": "2026-11-04T12:37:55.238Z",
+  "runs": [
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_lite.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 1083,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 68.3,
+        "median": 66.15,
+        "p95": 89.81,
+        "min": 53.83,
+        "max": 100.75
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_lite.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 660,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 45.17,
+        "median": 42.56,
+        "p95": 61.07,
+        "min": 35.66,
+        "max": 68.92
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_full.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 564,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 84.04,
+        "median": 77.32,
+        "p95": 127.85,
+        "min": 69.43,
+        "max": 149.43
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_full.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 377,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 61.12,
+        "median": 56.38,
+        "p95": 84.71,
+        "min": 49.47,
+        "max": 89.51
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_heavy.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 704,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 234.41,
+        "median": 223.61,
+        "p95": 309.15,
+        "min": 191.1,
+        "max": 354.61
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_heavy.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "810x1080/stretch",
+      "initMs": 1119,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 210.71,
+        "median": 202.85,
+        "p95": 263.04,
+        "min": 176.79,
+        "max": 299.35
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_lite.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 258,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 64.08,
+        "median": 60.79,
+        "p95": 81.78,
+        "min": 55.81,
+        "max": 84.5
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_lite.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 609,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 42.31,
+        "median": 40.96,
+        "p95": 54.25,
+        "min": 33.58,
+        "max": 62.77
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_full.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 269,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 85.01,
+        "median": 81.9,
+        "p95": 110.47,
+        "min": 69.41,
+        "max": 118.4
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_full.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 236,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 63.76,
+        "median": 61.79,
+        "p95": 83.29,
+        "min": 51.4,
+        "max": 105.79
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_heavy.task",
+      "mode": "image",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 878,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 222.24,
+        "median": 216.21,
+        "p95": 282.56,
+        "min": 192.22,
+        "max": 312.79
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "pose",
+      "model": "/models/pose_heavy.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 482,
+      "hitRate": 1,
+      "msHit": {
+        "n": 100,
+        "mean": 203.52,
+        "median": 194.3,
+        "p95": 269.2,
+        "min": 178.17,
+        "max": 291.89
+      },
+      "msMiss": null
+    },
+    {
+      "runtime": "mediapipe-tasks-vision/wasm-cpu",
+      "kind": "hand",
+      "model": "/models/hand.task",
+      "mode": "video",
+      "img": "/fixtures/bus.jpg",
+      "input": "1280x720/letterbox",
+      "initMs": 253,
+      "hitRate": 0,
+      "msHit": null,
+      "msMiss": {
+        "n": 100,
+        "mean": 51.41,
+        "median": 48.35,
+        "p95": 65.42,
+        "min": 41.27,
+        "max": 75.03
+      }
+    }
+  ]
+}

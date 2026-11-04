@@ -1,0 +1,12 @@
+node_modules/
+bench/web/models/
+bench/web/fixtures/
+bench/web/results.json
+bench/py/.venv/
+bench/py/models/
+__pycache__/
+*.onnx
+*.pt
+*.task
+.DS_Store
+testdata/
