@@ -1,5 +1,5 @@
 import type { Frame, FrameSource, SourceInfo } from './types';
-import { SourceError } from './types';
+import { SourceError, mountHidden, unmountHidden } from './types';
 
 export interface VideoFileOptions { loop?: boolean; playbackRate?: number; maxFrameWidth?: number }
 
@@ -14,7 +14,7 @@ export class VideoFileSource implements FrameSource {
   constructor(private readonly file: File | Blob, private readonly opt: VideoFileOptions = {}) {
     this.url = URL.createObjectURL(file);
     this.element = document.createElement('video');
-    this.element.muted = true; this.element.playsInline = true; this.element.loop = opt.loop ?? true; this.element.src = this.url;
+    this.element.muted = true; this.element.playsInline = true; this.element.loop = opt.loop ?? true; this.element.src = this.url; mountHidden(this.element);
     this.infoV = { kind: 'datei', label: (file as File).name ?? 'Videodatei', width: 0, height: 0, fps: null, tatsaechlich: true };
   }
   async start(): Promise<void> {
@@ -55,5 +55,5 @@ export class VideoFileSource implements FrameSource {
   get duration(): number { return this.element.duration; }
   onFrame(cb: (f: Frame) => void): () => void { this.cbs.add(cb); return () => this.cbs.delete(cb); }
   info(): SourceInfo { return this.infoV; }
-  stop(): void { this.running = false; this.element.pause(); URL.revokeObjectURL(this.url); }
+  stop(): void { this.running = false; this.element.pause(); URL.revokeObjectURL(this.url); unmountHidden(this.element); }
 }

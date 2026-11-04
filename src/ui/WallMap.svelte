@@ -2,23 +2,28 @@
   import { onMount } from 'svelte';
   import type { Hold, Limb } from '../core/schemas';
   import type { LimbRender, RenderState, WallPointer } from './wallTypes';
+  import { VideoWarp } from './VideoWarp';
+  import type { Mat3 } from '../geometry/homography';
   import { LIMBS } from '../core/schemas';
   import { color, limbColor, limbQuadrant, limbShape } from '../design/tokens';
 
   interface Props {
-    holds: Hold[]; aspekt: number; background?: ImageBitmap | null; backgroundDim?: number;
-    getState?: () => RenderState; showIds?: boolean; showSkeleton?: boolean; showConf?: boolean; debug?: boolean; swap?: boolean;
-    selected?: ReadonlySet<number>; overlay?: ((ctx: CanvasRenderingContext2D, tf: (u: number, v: number) => [number, number], zoom: number) => void) | undefined;
+    holds: Hold[]; aspekt: number; background?: ImageBitmap | null | undefined; backgroundDim?: number;
+    getState?: (() => RenderState) | undefined; showIds?: boolean; showSkeleton?: boolean; showConf?: boolean; debug?: boolean; swap?: boolean;
+    selected?: ReadonlySet<number> | undefined; overlay?: ((ctx: CanvasRenderingContext2D, tf: (u: number, v: number) => [number, number], zoom: number) => void) | undefined;
     onwall?: ((e: WallPointer) => void) | undefined; staticVersion?: number; cursor?: string; label?: string; fpsOut?: (fps: number) => void;
     fillColors?: Map<number, string> | undefined;
+    /** Live-Bild, perspektivisch entzerrt als Wand-Hintergrund (Kamera steht fest, H = Kamera→Wand). */
+    video?: { element: HTMLVideoElement | null; h: Mat3 | null; opacity: number } | undefined;
   }
   let { holds, aspekt, background = null, backgroundDim = 0.55, getState, showIds = false, showSkeleton = true, showConf = true, debug = false, swap = false,
-    selected, overlay, onwall, staticVersion = 0, cursor = 'default', label = 'Digitale Wandkarte', fpsOut, fillColors }: Props = $props();
+    selected, overlay, onwall, staticVersion = 0, cursor = 'default', label = 'Digitale Wandkarte', fpsOut, fillColors, video }: Props = $props();
 
   let canvas: HTMLCanvasElement; let wrap: HTMLDivElement;
   let cssW = 0, cssH = 0, dpr = 1;
   let zoom = 1, panX = 0, panY = 0; // Ansicht (Zoom um Mittelpunkt, Verschiebung in CSS-px)
-  let staticLayer: HTMLCanvasElement | null = null; let staticDirty = true;
+  let bgLayer: HTMLCanvasElement | null = null; let holdLayer: HTMLCanvasElement | null = null; let staticDirty = true;
+  let warp: VideoWarp | null = null; let warpKey = '';
   let raf = 0; let frames = 0, tFps = performance.now();
 
   const BONES: [number, number][] = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28], [27, 29], [29, 31], [27, 31], [28, 30], [30, 32], [28, 32], [15, 17], [15, 19], [16, 18], [16, 20]];
@@ -45,15 +50,18 @@
     ctx.closePath();
   }
 
+  function layer(c: HTMLCanvasElement | null): { c: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+    const cv = c ?? document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(cssW * dpr)); cv.height = Math.max(1, Math.round(cssH * dpr));
+    const ctx = cv.getContext('2d') as CanvasRenderingContext2D; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, cssW, cssH);
+    return { c: cv, ctx };
+  }
   function drawStatic(): void {
-    if (!staticLayer) staticLayer = document.createElement('canvas');
-    staticLayer.width = Math.max(1, Math.round(cssW * dpr)); staticLayer.height = Math.max(1, Math.round(cssH * dpr));
-    const ctx = staticLayer.getContext('2d') as CanvasRenderingContext2D;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
     const [x0, y0] = tf(0, 0), [x1, y1] = tf(1, 1);
-    ctx.fillStyle = '#05070a'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-    if (background) { ctx.drawImage(background, x0, y0, x1 - x0, y1 - y0); ctx.fillStyle = `rgba(5,7,10,${backgroundDim})`; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); }
+    const bg = layer(bgLayer); bgLayer = bg.c; const b = bg.ctx;
+    b.fillStyle = '#05070a'; b.fillRect(x0, y0, x1 - x0, y1 - y0);
+    if (background) { b.drawImage(background, x0, y0, x1 - x0, y1 - y0); b.fillStyle = `rgba(5,7,10,${backgroundDim})`; b.fillRect(x0, y0, x1 - x0, y1 - y0); }
+    const hl = layer(holdLayer); holdLayer = hl.c; const ctx = hl.ctx;
     ctx.strokeStyle = color.border; ctx.lineWidth = 1; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
     const lw = Math.max(1, 1.4 * Math.sqrt(zoom));
     for (const h of holds) {
@@ -70,6 +78,15 @@
     }
     staticDirty = false;
   }
+  /** Live-Bild entzerrt unter die Griffe legen. */
+  function drawVideo(ctx: CanvasRenderingContext2D): void {
+    const v = video; if (!v?.element || !v.h || v.opacity <= 0) return;
+    const w = Math.min(1280, Math.max(256, Math.round(baseRect().w * dpr))), h = Math.max(64, Math.round(w / aspekt)), key = `${w}x${h}`;
+    if (!warp || warpKey !== key) { warp = new VideoWarp(w, h); warpKey = key; }
+    if (!warp.render(v.element, v.h)) return;
+    const [x0, y0] = tf(0, 0), [x1, y1] = tf(1, 1);
+    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = Math.min(1, v.opacity); ctx.drawImage(warp.canvas, x0, y0, x1 - x0, y1 - y0); ctx.restore();
+  }
 
   function drawMarker(ctx: CanvasRenderingContext2D, limb: Limb, x: number, y: number, r: number, dashed: boolean): void {
     ctx.save();
@@ -84,10 +101,12 @@
 
   function render(): void {
     const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-    if (staticDirty || !staticLayer) drawStatic();
+    if (staticDirty || !bgLayer || !holdLayer) drawStatic();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(staticLayer as HTMLCanvasElement, 0, 0);
+    ctx.drawImage(bgLayer as HTMLCanvasElement, 0, 0);
+    drawVideo(ctx);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(holdLayer as HTMLCanvasElement, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const st = getState?.();
     const byId = new Map<number, Hold>(); for (const h of holds) byId.set(h.id, h);
@@ -198,6 +217,12 @@
     if (zoom === 1) { panX = 0; panY = 0; } staticDirty = true;
   }
   export function resetView(): void { zoom = 1; panX = 0; panY = 0; staticDirty = true; }
+  /** Wandkoordinate → CSS-Pixel im Kartenbereich (für schwebende Bedienelemente). */
+  export function project(u: number, v: number): [number, number] { return tf(u, v); }
+  /** Zoomt auf einen Wandpunkt. */
+  export function focus(u: number, v: number, z = 3): void { const b = baseRect(); zoom = Math.max(1, Math.min(12, z)); panX = -(b.x + u * b.w - cssW / 2) * zoom; panY = -(b.y + v * b.h - cssH / 2) * zoom; staticDirty = true; }
+  export function size(): [number, number] { return [cssW, cssH]; }
+  export function zoomLevel(): number { return zoom; }
   export function toPng(): Promise<Blob | null> { return new Promise((res) => { render(); canvas.toBlob((b) => res(b), 'image/png'); }); }
   export function element(): HTMLCanvasElement { return canvas; }
 </script>

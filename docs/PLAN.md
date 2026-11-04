@@ -31,6 +31,9 @@ Offene Qualitätsfragen (nur mit deinen echten Daten beantwortbar): Pose-Rate au
 
 ---
 
+### Redesign (Nutzerfeedback nach dem ersten Test)
+Statt sechs Seiten gibt es **einen Arbeitsbereich** mit der Wandkarte immer groß in der Mitte (Modi Live · Griffe · Aufnahmen, Einstellungen als Schublade). Das Live-Bild wird per WebGL **entzerrt als Wand-Hintergrund** gerendert (die Kamera steht fest; `H` bildet jedes Bild exakt auf die Wand ab) – kein verschiebbares Kamerafenster mehr. Registrierung läuft **automatisch** mit der gespeicherten Homographie (manuelle Ecken nur als Rückfall). Der **virtuelle ESP32, Mapping- und Farbeditor sind entfernt**; übrig ist die reine Sende-Schnittstelle. Der Editor wurde auf Direktmanipulation umgestellt (Auswahl/Bereich/Hinzufügen per Klick, Prüfhilfe). Gefundene Fehler: Windows-Pfadbug beim Kopieren der MediaPipe-Dateien (→ Live-Start schlug fehl; jetzt Vite-Plugin), Race beim ersten Videobild, Zoom-Zustand beim Moduswechsel.
+
 ## 1. Kurzfassung
 
 1. **Machbar, aber nicht so, wie die Spec es suggeriert.** Der Browser-Stack (Vite + TS + Svelte + MediaPipe/ONNX in Web Workern) ist tragfähig. Das schwierige Stück ist nicht Pose, sondern **Griff-Kontakt-Zuordnung bei verdeckten Händen/Füßen** – dafür gibt es keine fertige Lösung, nur Hobby-Repos und eine Handvoll Paper.

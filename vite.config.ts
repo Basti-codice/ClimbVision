@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
@@ -20,8 +22,22 @@ function securityHeaders(): import('vite').Plugin {
   return { name: 'climbvision-security-headers', configureServer: (s) => { s.middlewares.use(mw); }, configurePreviewServer: (s) => { s.middlewares.use(mw); } };
 }
 
+/** Kopiert MediaPipe (IIFE-Bundle + WASM) nach public/vendor – klassische Worker können es nicht über Vite bündeln. Läuft bei jedem dev/build-Start (plattformunabhängig, kein postinstall nötig). */
+function mediapipeVendor(): import('vite').Plugin {
+  return {
+    name: 'climbvision-mediapipe-vendor',
+    buildStart() {
+      const src = path.resolve('node_modules/@mediapipe/tasks-vision'), dst = path.resolve('public/vendor/mediapipe');
+      if (!fs.existsSync(src)) throw new Error('@mediapipe/tasks-vision fehlt. Bitte „npm install“ ausführen.');
+      fs.mkdirSync(path.join(dst, 'wasm'), { recursive: true });
+      fs.copyFileSync(path.join(src, 'vision_bundle.js'), path.join(dst, 'vision_bundle.js'));
+      for (const f of fs.readdirSync(path.join(src, 'wasm'))) fs.copyFileSync(path.join(src, 'wasm', f), path.join(dst, 'wasm', f));
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [svelte(), securityHeaders()],
+  plugins: [mediapipeVendor(), svelte(), securityHeaders()],
   server: { host: '127.0.0.1', port: 5173, headers: isolation },
   preview: { host: '127.0.0.1', port: 4173, headers: isolation },
   build: { target: 'es2022', sourcemap: true },

@@ -7,7 +7,6 @@ import type { EngineStats } from '../engine/live';
 import type { Mat3 } from '../geometry/homography';
 import type { RegistrierungsQualitaet } from '../core/schemas';
 import { setLang, type Lang } from '../i18n';
-import { defaultMapping, type LedMapping } from '../transport/mapping';
 import { Esp32Service } from './esp32';
 import { CvClient } from './cv';
 import { bitmapToRgba, blobToBytes, rgbaToImageBitmap } from './imageio';
@@ -15,20 +14,17 @@ import { migrate } from '../core/migrate';
 import { selectAnchors, type Anchor } from '../registration/drift';
 import { toGray } from '../image/raster';
 
-export type Page = 'start' | 'live' | 'scan' | 'sessions' | 'esp32' | 'settings';
-
 export interface Settings {
   poseModel: 'pose_lite' | 'pose_full';
   useHands: boolean; delegate: 'CPU' | 'GPU'; swapLeftRight: boolean;
   tolHandCm: number; tolFootCm: number; oneEuroMinCutoff: number; oneEuroBeta: number;
   thetaOn: number; thetaOff: number; handIntervalMs: number;
-  showIds: boolean; showSkeleton: boolean; showConf: boolean; debug: boolean; showCamera: boolean; cameraFocus: boolean; wallBackground: 'foto' | 'dunkel';
+  showIds: boolean; showSkeleton: boolean; showConf: boolean; debug: boolean; wallBackground: 'live' | 'foto' | 'dunkel'; videoOpacity: number;
   lang: Lang; highContrast: boolean; recordData: boolean; recordVideo: boolean; esp32Url: string; cameraWidth: number; cameraFps: number;
 }
 export const DEFAULT_SETTINGS: Settings = {
   poseModel: 'pose_lite', useHands: true, delegate: 'CPU', swapLeftRight: false, tolHandCm: 4, tolFootCm: 5, oneEuroMinCutoff: 1.5, oneEuroBeta: 0.05,
-  thetaOn: 0.65, thetaOff: 0.4, handIntervalMs: 100, showIds: false, showSkeleton: true, showConf: true, debug: false, showCamera: true, cameraFocus: false,
-  wallBackground: 'foto', lang: 'de', highContrast: false, recordData: true, recordVideo: false, esp32Url: 'ws://192.168.4.1:81', cameraWidth: 1280, cameraFps: 30,
+  thetaOn: 0.65, thetaOff: 0.4, handIntervalMs: 100, showIds: false, showSkeleton: true, showConf: true, debug: false,   wallBackground: 'live', videoOpacity: 0.85, lang: 'de', highContrast: false, recordData: true, recordVideo: false, esp32Url: 'ws://192.168.4.1:81', cameraWidth: 1280, cameraFps: 30,
 };
 
 export interface Toast { id: number; text: string; kind: 'info' | 'ok' | 'warn' | 'err' }
@@ -36,7 +32,6 @@ export interface Registration { ampel: 'gruen' | 'gelb' | 'rot' | 'unbekannt'; h
 
 class AppState {
   ready = $state(false);
-  page = $state<Page>('start');
   leftOpen = $state(true); rightOpen = $state(true); contentMode = $state(false);
   sections = $state<Record<string, boolean>>({ kontakte: true, status: true, hud: true, debug: false, auswertung: true });
   settings = $state<Settings>({ ...DEFAULT_SETTINGS });
@@ -47,7 +42,6 @@ class AppState {
   rect = $state.raw<Rgba | null>(null);          // entzerrtes Referenzbild (groß → nicht tief reaktiv, übertragbar)
   rectBitmap = $state.raw<ImageBitmap | null>(null);
   sessions = $state<SessionDoc[]>([]);
-  mapping = $state<LedMapping>(defaultMapping(300));
   toasts = $state<Toast[]>([]);
   modelsCached = $state<Record<string, boolean>>({});
   registration = $state<Registration>({ ampel: 'unbekannt', h: null, quality: null });
@@ -56,12 +50,19 @@ class AppState {
   stats = $state<EngineStats | null>(null);
   renderFps = $state(0);
   live = $state(false);
+  /** Laufender Modell-Download (einmalig, beim ersten Start der Erkennung). */
+  modelProgress = $state<{ name: string; fraction: number } | null>(null);
+  /** Arbeitsbereich: 'setup' (Wand einrichten), 'live', 'edit' (Griffe), 'replay' (Aufnahmen). Die Wandkarte ist immer in der Mitte. */
+  mode = $state<'setup' | 'live' | 'edit' | 'replay'>('live');
+  settingsOpen = $state(false);
   /** Von Bibliotheken versuchte externe Anfragen, die der Netzwerkwächter abgewehrt hat (Datenschutz-Anzeige). */
   blockedExternal = $state<{ count: number; last: string }>({ count: 0, last: '' });
 
+  /** Von der Bühne gesetzt: Wandkarte auf einen Punkt zoomen / Ansicht zurücksetzen / Screenshot. */
+  stageApi: { focus(u: number, v: number, z?: number): void; reset(): void; png(): Promise<Blob | null>; canvas(): HTMLCanvasElement | null; project(u: number, v: number): [number, number]; zoom(): number } | null = null;
   store!: Store;
   cv = new CvClient();
-  esp = new Esp32Service(defaultMapping(300));
+  esp = new Esp32Service();
   anchors: Anchor[] = [];
   private toastId = 0;
 
@@ -70,19 +71,16 @@ class AppState {
     const saved = await this.store.getSetting<Partial<Settings>>('settings', {});
     this.settings = { ...DEFAULT_SETTINGS, ...saved };
     setLang(this.settings.lang);
-    this.mapping = await this.store.getSetting<LedMapping>('ledMapping', defaultMapping(300));
-    this.esp.setMapping(this.mapping);
     this.profiles = await this.store.listProfiles();
     const last = await this.store.getSetting<string | null>('activeProfile', null);
     const target = this.profiles.find((p) => p.id === last) ?? this.profiles[0];
     if (target) await this.selectProfile(target.id);
     await this.refreshModels();
-    this.page = this.profile ? 'live' : 'start';
+    this.mode = this.profile ? 'live' : 'setup';
     this.ready = true;
   }
 
   async saveSettings(): Promise<void> { await this.store.setSetting('settings', $state.snapshot(this.settings)); setLang(this.settings.lang); }
-  async saveMapping(): Promise<void> { await this.store.setSetting('ledMapping', $state.snapshot(this.mapping)); this.esp.setMapping(this.mapping); }
   async refreshModels(): Promise<void> {
     const { isCached } = await import('./models');
     const out: Record<string, boolean> = {};

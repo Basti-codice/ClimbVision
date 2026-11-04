@@ -1,11 +1,10 @@
-/** Transporte zum ESP32: einheitliches Interface + WebSocket (Standard), Web Serial, Web Bluetooth (NUS) und virtueller ESP32. */
-import { PROTOCOL_VERSION, chunk, decode, encode, encodeBinary, type Msg, type Snapshot, Reassembler, ProtocolError, decodeBinary } from './protocol';
-import { ledFrame, type LedMapping, type LedPixel } from './mapping';
+/** Transporte zum ESP32: einheitliches Interface + WebSocket (Standard), Web Serial, Web Bluetooth (NUS). Der ESP32 selbst ist nicht Teil der Software – hier liegt nur die Schnittstelle. */
+import { PROTOCOL_VERSION, chunk, decode, encode, encodeBinary, type Msg, type Snapshot, Reassembler, ProtocolError } from './protocol';
 
 export type TransportState = 'getrennt' | 'verbinde' | 'verbunden' | 'wiederverbinde' | 'fehler';
 export interface TransportStatus { state: TransportState; latencyMs: number | null; meldung?: string; reconnects: number; lastRx: number | null }
 export interface Esp32Transport {
-  readonly kind: 'websocket' | 'serial' | 'ble' | 'virtual';
+  readonly kind: 'websocket' | 'serial' | 'ble';
   connect(): Promise<void>;
   send(msg: Msg | Snapshot, seq?: number): void;
   onStatus(cb: (s: TransportStatus) => void): () => void;
@@ -185,57 +184,4 @@ export class WebBluetoothTransport extends Base implements Esp32Transport {
     else void this.rx.writeValueWithoutResponse(encodeBinary(++this.seq, msg) as unknown as BufferSource);
   }
   disconnect(): void { this.gatt?.disconnect(); this.set({ state: 'getrennt' }); }
-}
-
-export interface VirtualLogEntry { dir: 'tx' | 'rx'; t: number; bytes: number; text: string }
-
-/** Virtueller ESP32: simuliert Gerät (hello/ack/pong, LED-Frame) komplett im Browser – testet die gesamte Datenpipeline ohne Hardware. */
-export class VirtualEsp32 extends Base implements Esp32Transport {
-  readonly kind = 'virtual' as const;
-  log: VirtualLogEntry[] = [];
-  leds: LedPixel[] = [];
-  lastSnapshot: Snapshot | null = null;
-  /** Simulierte Eigenschaften */
-  latencyMs = 15;
-  dropRate = 0;
-  mapping: LedMapping;
-  private logCbs = new Set<(e: VirtualLogEntry) => void>();
-  private lastSeq = -1;
-  missed = 0;
-  constructor(mapping: LedMapping, private readonly clock: Clock = realClock, private readonly rng: () => number = Math.random) { super(); this.mapping = mapping; }
-  onLog(cb: (e: VirtualLogEntry) => void): () => void { this.logCbs.add(cb); return () => this.logCbs.delete(cb); }
-  private push(e: VirtualLogEntry): void { this.log.push(e); if (this.log.length > 500) this.log.shift(); for (const c of this.logCbs) c(e); }
-  connect(): Promise<void> { this.set({ state: 'verbunden', latencyMs: this.latencyMs, lastRx: this.clock.now() }); return Promise.resolve(); }
-  disconnect(): void { this.set({ state: 'getrennt' }); }
-  /** Verbindungsabbruch simulieren (für Reconnect-Tests der Anwendung). */
-  simulateDrop(): void { this.set({ state: 'wiederverbinde', reconnects: this.status.reconnects + 1 }); }
-  simulateRecover(): void { this.set({ state: 'verbunden' }); }
-  send(msg: Msg | Snapshot): void {
-    if (this.status.state !== 'verbunden') return;
-    const text = 't' in msg ? encode(msg as Msg) : '[binär] ' + Array.from(encodeBinary(0, msg)).map((b) => b.toString(16).padStart(2, '0')).join(' ');
-    this.push({ dir: 'tx', t: this.clock.now(), bytes: 't' in msg ? new TextEncoder().encode(text).length : 16, text });
-    if (this.rng() < this.dropRate) return;
-    const reply = (m: Msg): void => { void this.clock.setTimeout(() => { this.push({ dir: 'rx', t: this.clock.now(), bytes: encode(m).length, text: encode(m) }); this.set({ lastRx: this.clock.now() }); this.emitMsg(m); }, this.latencyMs); };
-    if ('t' in msg) {
-      const m = msg as Msg;
-      if (m.t === 'hello') reply({ v: 1, t: 'hello', seq: m.seq, ts: m.t === 'hello' ? m.ts : 0, device: 'virtual-esp32', fw: 'sim-0.1', leds: this.mapping.ledCount, caps: ['json', 'bin'] });
-      else if (m.t === 'ping') reply({ v: 1, t: 'pong', seq: m.seq, ts: m.ts });
-      else if (m.t === 's') {
-        if (this.lastSeq >= 0 && m.seq > this.lastSeq + 1) this.missed += m.seq - this.lastSeq - 1;
-        this.lastSeq = m.seq;
-        const snap = {} as Snapshot;
-        for (const l of ['LH', 'RH', 'LF', 'RF'] as const) { const w = m.s[l]; snap[l] = { holdId: w ? w.h : null, confidence: w ? w.c / 100 : 0, ambiguous: !!w?.a }; }
-        this.lastSnapshot = snap; this.leds = ledFrame(snap, this.mapping);
-        reply({ v: 1, t: 'ack', seq: m.seq });
-      } else if (m.t === 'cfg') {
-        if (m.map) this.mapping = { ...this.mapping, map: Object.fromEntries(m.map) };
-        if (m.colors) this.mapping = { ...this.mapping, colors: m.colors };
-        if (m.brightness !== undefined) this.mapping = { ...this.mapping, brightness: m.brightness };
-        reply({ v: 1, t: 'ack', seq: m.seq });
-      }
-    } else {
-      this.lastSnapshot = msg; this.leds = ledFrame(msg, this.mapping);
-      try { void decodeBinary(encodeBinary(0, msg)); } catch { /* nie */ }
-    }
-  }
 }

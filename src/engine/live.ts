@@ -16,6 +16,13 @@ export interface EngineOptions {
   onStats?: (s: EngineStats) => void; onError?: (m: string) => void; onBlocked?: (count: number, url: string) => void; swapLeftRight?: boolean;
 }
 
+/** Übersetzt typische Worker-Startfehler in verständliche Hinweise. */
+function friendly(m: string): string {
+  if (/importScripts|vision_bundle/i.test(m)) return 'Die MediaPipe-Programmdateien (public/vendor/mediapipe) konnten nicht geladen werden. Bitte die App mit „npm start“ neu starten (die Dateien werden dabei neu angelegt).';
+  if (/wasm|WebAssembly/i.test(m)) return 'WebAssembly konnte nicht geladen werden (' + m.slice(0, 80) + ').';
+  return m;
+}
+
 type PoseRes = { type: 'result'; id: number; t: number; ms: number; poses?: PoseCandidate[]; hands?: HandCandidate[] };
 
 export class LiveEngine {
@@ -38,7 +45,7 @@ export class LiveEngine {
   private spawn(kind: 'pose' | 'hand', model: ArrayBuffer): Promise<Worker> {
     return new Promise((resolve, reject) => {
       const w = new Worker('/workers/mediapipe.worker.js'); // classic (importScripts)
-      w.onmessage = (e: MessageEvent<{ type: string; message?: string; count?: number; url?: string }>) => { if (e.data.type === 'ready') resolve(w); else if (e.data.type === 'error') reject(new Error(e.data.message)); else if (e.data.type === 'blocked') this.o.onBlocked?.(e.data.count ?? 0, e.data.url ?? ''); };
+      w.onmessage = (e: MessageEvent<{ type: string; message?: string; count?: number; url?: string }>) => { if (e.data.type === 'ready') resolve(w); else if (e.data.type === 'error') reject(new Error(friendly(e.data.message ?? ''))); else if (e.data.type === 'blocked') this.o.onBlocked?.(e.data.count ?? 0, e.data.url ?? ''); };
       w.onerror = (e) => reject(new Error(e.message || 'Worker-Fehler'));
       w.postMessage({ type: 'init', kind, model: model.slice(0), base: this.o.base ?? '/vendor/mediapipe', delegate: this.o.delegate ?? 'CPU', numPoses: this.o.numPoses ?? 1, numHands: 2, mode: kind === 'pose' ? 'VIDEO' : 'IMAGE' });
     });

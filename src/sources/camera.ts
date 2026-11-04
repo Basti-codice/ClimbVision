@@ -1,4 +1,4 @@
-import { describeMediaError, type Frame, type FrameSource, type SourceInfo } from './types';
+import { describeMediaError, mountHidden, unmountHidden, type Frame, type FrameSource, type SourceInfo } from './types';
 
 export interface CameraDevice { deviceId: string; label: string }
 export interface CameraOptions { deviceId?: string | undefined; width?: number | undefined; height?: number | undefined; fps?: number | undefined; maxFrameWidth?: number | undefined }
@@ -31,7 +31,7 @@ export class CameraSource implements FrameSource {
     const track = this.stream.getVideoTracks()[0];
     const s = track?.getSettings() ?? {};
     const v = document.createElement('video');
-    v.muted = true; v.playsInline = true; v.srcObject = this.stream;
+    v.muted = true; v.playsInline = true; v.srcObject = this.stream; mountHidden(v);
     await v.play();
     this.element = v;
     this.infoV = { kind: 'kamera', label: track?.label ?? 'Kamera', width: s.width ?? v.videoWidth, height: s.height ?? v.videoHeight, fps: s.frameRate ?? null, tatsaechlich: true };
@@ -58,5 +58,5 @@ export class CameraSource implements FrameSource {
   }
   onFrame(cb: (f: Frame) => void): () => void { this.cbs.add(cb); return () => this.cbs.delete(cb); }
   info(): SourceInfo { return this.infoV; }
-  stop(): void { this.running = false; this.stream?.getTracks().forEach((t) => t.stop()); this.stream = null; if (this.element) { this.element.srcObject = null; } }
+  stop(): void { this.running = false; this.stream?.getTracks().forEach((t) => t.stop()); this.stream = null; if (this.element) { this.element.srcObject = null; unmountHidden(this.element); } }
 }

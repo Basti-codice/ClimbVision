@@ -1,6 +1,6 @@
 // Plattformunabhängiger Download der Benchmark-Eingaben (Windows/macOS/Linux): node fetch-models.mjs
-import fs from 'node:fs'; import path from 'node:path';
-const out = process.env.BENCH_OUT ?? path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'web');
+import fs from 'node:fs'; import path from 'node:path'; import { fileURLToPath } from 'node:url';
+const out = process.env.BENCH_OUT ?? path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 const B = 'https://storage.googleapis.com/mediapipe-models';
 const files = [
   ...['lite', 'full', 'heavy'].map((v) => [`models/pose_${v}.task`, `${B}/pose_landmarker/pose_landmarker_${v}/float16/1/pose_landmarker_${v}.task`]),

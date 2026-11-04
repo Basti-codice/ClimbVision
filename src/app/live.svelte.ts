@@ -2,10 +2,10 @@
 import { app } from './state.svelte';
 import { CameraSource, listCameras, type CameraDevice } from '../sources/camera';
 import { VideoFileSource } from '../sources/videofile';
-import type { FrameSource } from '../sources/types';
+import { waitForVideoFrame, type FrameSource } from '../sources/types';
 import { LiveEngine } from '../engine/live';
 import { LivePipeline, defaultPipelineConfig, type FrameOutput } from '../pipeline/live';
-import { loadModel } from './models';
+import { downloadModel, isCached, loadModel, type ModelId } from './models';
 import { bitmapToRgba, medianFrames, rgbaToBlob, blobToBytes } from './imageio';
 import { normalizedHomography, refinedHomography, rectify, verdict, rectSize } from './wizard';
 import type { Rgba } from '../image/raster';
@@ -14,7 +14,7 @@ import { measureDrift, type DriftMeasure } from '../registration/drift';
 import { SessionRecorder, encodeChunk } from '../session/recorder';
 import { snapshotOf } from './esp32';
 import type { Mat3, Vec2 } from '../geometry/homography';
-import { mul3 } from '../geometry/homography';
+import { applyH, inv3, mul3 } from '../geometry/homography';
 import type { RenderState } from '../ui/wallTypes';
 import type { SessionDoc } from '../core/schemas';
 
@@ -60,10 +60,53 @@ class LiveController {
       if (kind === 'datei') this.videoFile = file ?? null;
       await s.start(); this.source = s; this.sourceLabel = s.info().label;
       await this.refreshDevices();
-      const i = s.info(); app.toast(`Quelle aktiv: ${i.width}×${i.height}${i.fps ? ` @ ${Math.round(i.fps)} fps` : ''}${i.tatsaechlich ? ' (tatsächlich geliefert)' : ''}`, 'ok');
+      const i = s.info(); app.toast(`Quelle aktiv: ${i.width}×${i.height}${i.fps ? ` @ ${Math.round(i.fps)} fps` : ''}${i.tatsaechlich ? ' (tatsächlich geliefert)' : ''}`, 'ok', 3500);
     } catch (e) { app.error(e); this.source = null; } finally { this.busy = false; }
+    if (this.source && app.profile) await this.autoRegister();
   }
   closeSource(): void { void this.stop(); this.source?.stop(); this.source = null; this.sourceLabel = ''; }
+
+  /**
+   * Automatische Registrierung: Die Kamera steht an derselben Stelle wie beim Setup-Foto → die gespeicherte Homographie wird direkt
+   * auf das Live-Bild angewendet und nur bildbasiert nachjustiert. Keine Klicks nötig. Passt es nicht (Kamera bewegt) → manueller Dialog.
+   */
+  async autoRegister(silent = false): Promise<boolean> {
+    const v = this.source?.element, p = app.profile;
+    if (!v || !p || !app.rect) return false;
+    this.busy = true; this.regInfo = '';
+    try {
+      await waitForVideoFrame(v);
+      const frames: Rgba[] = [];
+      for (let i = 0; i < 3; i++) { const b = await createImageBitmap(v); frames.push(await bitmapToRgba(b, 1280)); b.close(); await new Promise((r) => setTimeout(r, 60)); }
+      const img = medianFrames(frames);
+      const h0 = p.homographie as unknown as Mat3;
+      const sz = rectSize(p.aspekt, 800);
+      const neu = rectify(img, h0, p.aspekt, 800);
+      const ref = resizeRgba(app.rect, sz.w, sz.h);
+      const r = await app.cv.register(ref, neu, ($state.snapshot(app.holds) as typeof app.holds).map((h) => h.polygon), p.aspekt);
+      const verd = verdict(r.quality);
+      app.registration = { ampel: r.quality.ampel, h: verd.freigabe ? refinedHomography(h0, r.hRes) : null, quality: r.quality };
+      this.regInfo = `NCC ${r.quality.ncc.toFixed(2)} · Abweichung ${(r.quality.eckverschiebung * 100).toFixed(2)} %`;
+      if (r.quality.ampel === 'gruen') { if (!silent) app.toast('Kamera erkannt – Wand ausgerichtet.', 'ok', 2500); return true; }
+      if (r.quality.ampel === 'gelb') { app.toast('Wand ausgerichtet, aber ungenau. Tipp: Kamera nicht bewegen, gleichmäßiges Licht.', 'warn', 7000); return true; }
+      app.toast('Die Kamera scheint bewegt worden zu sein. Bitte die Wandecken kurz neu setzen.', 'warn', 8000);
+      this.busy = false; await this.beginRegistration(); return false;
+    } catch (e) { app.error(e, 'Automatische Ausrichtung fehlgeschlagen: '); return false; } finally { this.busy = false; }
+  }
+
+  /** Fehlende Modelle einmalig laden (mit Fortschritt) – kein Umweg über ein Menü. */
+  async ensureModels(): Promise<boolean> {
+    const need: ModelId[] = [app.settings.poseModel]; if (app.settings.useHands) need.push('hand');
+    for (const id of need) {
+      if (await isCached(app.store, id)) continue;
+      try {
+        app.modelProgress = { name: id === 'hand' ? 'Hand-Modell' : 'Pose-Modell', fraction: 0 };
+        const r = await downloadModel(app.store, id, (f) => { app.modelProgress = { name: id === 'hand' ? 'Hand-Modell' : 'Pose-Modell', fraction: f }; });
+        if (r.hashAbweichung) app.toast('Hinweis: Die Prüfsumme des Modells weicht von der dokumentierten ab.', 'warn');
+      } catch (e) { app.error(e); app.modelProgress = null; return false; }
+    }
+    app.modelProgress = null; await app.refreshModels(); return true;
+  }
 
   // ---------- Registrierung ----------
   /** Schritt 1: aktuelles Bild der laufenden Quelle aufnehmen (Median) → Ecken markieren. */
@@ -71,6 +114,7 @@ class LiveController {
     const v = this.source?.element; if (!v || !app.profile) { app.toast('Bitte zuerst eine Kamera oder Videodatei öffnen.', 'warn'); return; }
     this.regPhase = 'aufnahme'; this.busy = true;
     try {
+      await waitForVideoFrame(v);
       const frames: Rgba[] = []; const wasPaused = v.paused; v.pause();
       for (let i = 0; i < 5; i++) { const b = await createImageBitmap(v); frames.push(await bitmapToRgba(b, 1600)); b.close(); await new Promise((r) => setTimeout(r, 80)); }
       if (!wasPaused) void v.play();
@@ -111,21 +155,16 @@ class LiveController {
   }
 
   // ---------- Live ----------
-  get ready(): { ok: boolean; grund: string } {
-    if (!app.profile) return { ok: false, grund: 'Kein Wandprofil gewählt.' };
-    if (!app.holds.length) return { ok: false, grund: 'Es gibt noch keine Griffe. Bitte zuerst „Scan & Griffe“ ausführen.' };
-    if (!app.modelsCached[app.settings.poseModel]) return { ok: false, grund: 'Das Pose-Modell ist noch nicht geladen (Start & Setup → Modelle).' };
-    if (!this.source) return { ok: false, grund: 'Keine Kamera/Videodatei geöffnet.' };
-    if (app.registration.ampel === 'rot') return { ok: false, grund: 'Registrierung fehlgeschlagen. Bitte Ecken neu markieren oder die Wand neu scannen.' };
-    if (app.registration.ampel === 'unbekannt' || !app.registration.h) return { ok: false, grund: 'Die Kamera-Aufstellung ist noch nicht registriert („Wand registrieren“).' };
-    return { ok: true, grund: '' };
-  }
-
   async start(): Promise<void> {
-    const r = this.ready; if (!r.ok) { app.toast(r.grund, 'warn'); return; }
-    const p = app.profile as NonNullable<typeof app.profile>, s = app.settings;
+    const p = app.profile, s = app.settings;
+    if (!p) { app.toast('Bitte zuerst eine Wand einrichten.', 'warn'); return; }
+    if (!app.holds.length) { app.toast('Es gibt noch keine Griffe. Wechsle zu „Griffe“ und starte die Erkennung.', 'warn'); return; }
+    if (!this.source) { app.toast('Bitte zuerst die Kamera oder eine Videodatei öffnen.', 'warn'); return; }
+    if (app.registration.ampel === 'unbekannt' || !app.registration.h) { if (!(await this.autoRegister(true))) return; }
+    if (!app.registration.h) { app.toast('Die Wand ist nicht ausgerichtet. Bitte Ecken neu setzen.', 'err'); return; }
     this.busy = true;
     try {
+      if (!(await this.ensureModels())) return;
       const pose = await loadModel(app.store, s.poseModel); if (!pose) throw new Error('Pose-Modell fehlt im lokalen Speicher.');
       const hand = s.useHands && app.modelsCached['hand'] ? await loadModel(app.store, 'hand') : null;
       const cm = p.hoehe_cm ?? (p.breite_cm ? p.breite_cm / p.aspekt : 240); this.cmAssumed = !p.hoehe_cm && !p.breite_cm;
@@ -190,6 +229,11 @@ class LiveController {
     } catch { /* Drift-Prüfung ist best effort */ }
   }
 
+  /** "Person sperren" per Klick auf die Wandkarte: Wandpunkt → Kamerabild (Inverse der Registrierung). */
+  lockAtWall(u: number, v: number): void {
+    const h = app.registration.h; if (!h) return;
+    const q = applyH(inv3(h as Mat3), [u, v]); this.lockPerson({ x: q[0], y: q[1] });
+  }
   lockPerson(click: { x: number; y: number }): void { this.engine?.lockAt(click); this.armLock = false; }
   unlockPerson(): void { this.engine?.unlock(); }
   setPaused(p: boolean): void { this.paused = p; this.pipeline?.setPaused(p); }

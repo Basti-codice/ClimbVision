@@ -1,113 +1,93 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { app, type Page } from '../app/state.svelte';
+  import { onMount, untrack } from 'svelte';
+  import { app } from '../app/state.svelte';
   import { live } from '../app/live.svelte';
+  import { editor } from '../app/editor.svelte';
+  import { replay } from '../app/replay.svelte';
   import { t } from '../i18n';
-  import { limbColor } from '../design/tokens';
-  import { LIMBS } from '../core/schemas';
-  import Start from './pages/Start.svelte';
-  import Live from './pages/Live.svelte';
-  import Scan from './pages/Scan.svelte';
-  import Sessions from './pages/Sessions.svelte';
-  import Esp32 from './pages/Esp32.svelte';
-  import Settings from './pages/Settings.svelte';
+  import Stage from './Stage.svelte';
+  import LeftPanel from './panels/LeftPanel.svelte';
+  import RightPanel from './panels/RightPanel.svelte';
+  import BottomBar from './panels/BottomBar.svelte';
+  import SetupWizard from './SetupWizard.svelte';
+  import SettingsDrawer from './SettingsDrawer.svelte';
+  import CornerPicker from './CornerPicker.svelte';
 
-  const NAV: [Page, string, string][] = [['start', 'nav.start', '1'], ['live', 'nav.live', '2'], ['scan', 'nav.scan', '3'], ['sessions', 'nav.sessions', '4'], ['esp32', 'nav.esp32', '5'], ['settings', 'nav.settings', '6']];
+  const MODES: ['live' | 'edit' | 'replay', string, string][] = [['live', 'Live', '1'], ['edit', 'Griffe', '2'], ['replay', 'Aufnahmen', '3']];
   onMount(() => {
-    // Diagnose-Hook (nur mit ?debug in der URL): Zustand im Browser-Konsolenzugriff, z. B. für E2E-Tests
-    if (new URLSearchParams(location.search).has('debug')) (window as unknown as Record<string, unknown>)['__cv'] = { app, live };
+    if (new URLSearchParams(location.search).has('debug')) (window as unknown as Record<string, unknown>)['__cv'] = { app, live, editor, replay };
     void app.init().catch((e) => app.error(e, 'Start fehlgeschlagen: '));
+    let raf = 0; const loop = (n: number): void => { replay.tick(n); raf = requestAnimationFrame(loop); }; raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
   });
   $effect(() => { document.documentElement.classList.toggle('hc', app.settings.highContrast); });
+  // Editor: bei Wandwechsel neu laden; beim Verlassen speichern
+  $effect(() => { const id = app.profile?.id; untrack(() => { if (id) editor.load(); }); });
+  function setMode(m: 'live' | 'edit' | 'replay'): void { if (app.mode === 'edit' && m !== 'edit') editor.flush(); if (m !== 'live' && live.running) { app.toast('Die Live-Erkennung läuft noch – sie wird beim Wechsel beendet und gespeichert.', 'info', 3000); void live.stop(); } app.mode = m; app.stageApi?.reset(); if (m === 'replay') void app.store.listSessions(app.profile?.id).then((x) => { app.sessions = x; }); }
 
   function key(e: KeyboardEvent): void {
-    const el = e.target as HTMLElement; if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
-    const k = e.key;
-    const n = NAV.find((x) => x[2] === k); if (n) { app.page = n[0]; return; }
-    if (k === '[') app.leftOpen = !app.leftOpen; else if (k === ']') app.rightOpen = !app.rightOpen;
-    else if (k.toLowerCase() === 'c') app.contentMode = !app.contentMode; else if (k === 'Escape' && app.contentMode) app.contentMode = false;
-    else if (k.toLowerCase() === 'd') { app.settings.debug = !app.settings.debug; void app.saveSettings(); }
-    else if (k.toLowerCase() === 'i' && app.page !== 'scan') { app.settings.showIds = !app.settings.showIds; void app.saveSettings(); }
-    else if (k.toLowerCase() === 's' && app.page === 'live') { app.settings.showSkeleton = !app.settings.showSkeleton; void app.saveSettings(); }
-    else if (k.toLowerCase() === 'l' && app.page === 'live' && live.running) live.armLock = !live.armLock;
-    else if (k.toLowerCase() === 'f' && app.page === 'live') { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen(); }
+    const el = e.target as HTMLElement; if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+    if (app.mode === 'edit' && editor.key(e)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    const m = MODES.find((x) => x[2] === e.key); if (m && app.mode !== 'setup') { setMode(m[0]); return; }
+    if (e.key === '[') app.leftOpen = !app.leftOpen; else if (e.key === ']') app.rightOpen = !app.rightOpen;
+    else if (k === 'c') app.contentMode = !app.contentMode; else if (e.key === 'Escape') { app.contentMode = false; app.settingsOpen = false; }
+    else if (k === 'd') { app.settings.debug = !app.settings.debug; void app.saveSettings(); }
+    else if (k === 'i' && app.mode !== 'edit') { app.settings.showIds = !app.settings.showIds; void app.saveSettings(); }
+    else if (k === 's') { app.settings.showSkeleton = !app.settings.showSkeleton; void app.saveSettings(); }
+    else if (k === 'l' && app.mode === 'live' && live.running) live.armLock = !live.armLock;
+    else if (k === 'f') { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen(); }
   }
-  const out = $derived(app.output); const st = $derived(app.stats);
-  const sec = (k: string): void => { app.sections[k] = !app.sections[k]; };
-  const conf = (c: number): string => `${Math.round(c * 100)}%`;
+  let fps = $state(0);
+  const regDot = $derived(app.registration.ampel === 'gruen' ? 'ok' : app.registration.ampel === 'gelb' ? 'warn' : app.registration.ampel === 'rot' ? 'err' : '');
 </script>
 
 <svelte:window onkeydown={key} />
 
 {#if !app.ready}
-  <div class="boot"><div><h1>{t('app.name')}</h1><p class="muted">Lade lokale Daten …</p></div></div>
+  <div style="height:100%;display:grid;place-items:center;text-align:center"><div><h1>{t('app.name')}</h1><p class="muted">Lade lokale Daten …</p></div></div>
 {:else}
-  <div class="shell" class:content={app.contentMode} style:--l={app.leftOpen && !app.contentMode ? 'var(--sidebar-l)' : '0px'} style:--r={app.rightOpen && !app.contentMode && app.page === 'live' ? 'var(--sidebar-r)' : '0px'}>
-    {#if !app.contentMode}
-      <aside class="left" class:closed={!app.leftOpen} aria-label="Navigation und Einstellungen">
-        <div class="brand"><svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 24 L13 10 L18 18 L21 13 L27 24Z" fill="none" stroke="#7cc4ff" stroke-width="2.4" stroke-linejoin="round" /></svg><b>{t('app.name')}</b></div>
-        <nav>{#each NAV as [p, l, k] (p)}<button class="nav" class:on={app.page === p} onclick={() => { app.page = p; }}><span>{t(l)}</span><span class="kbd">{k}</span></button>{/each}</nav>
-        <div class="ctx">
-          <h3>Wandprofil</h3>
-          <select aria-label="Wandprofil" value={app.profile?.id ?? ''} onchange={(e) => app.selectProfile((e.target as HTMLSelectElement).value)}>{#if !app.profiles.length}<option value="">– keins –</option>{/if}{#each app.profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}</select>
-          <h3>Modell</h3>
-          <select aria-label="Pose-Modell" bind:value={app.settings.poseModel} onchange={() => app.saveSettings()} disabled={live.running}><option value="pose_lite">Pose Lite (schnell)</option><option value="pose_full">Pose Full (genauer)</option></select>
-          <h3>Anzeige</h3>
-          {#each [['showIds', 'Griff-IDs'], ['showSkeleton', 'Skelett'], ['showConf', 'Konfidenz'], ['debug', 'Debug']] as [k, l] (k)}
-            <label class="chk"><input type="checkbox" checked={app.settings[k as 'debug']} onchange={(e) => { (app.settings as unknown as Record<string, boolean>)[k as string] = (e.target as HTMLInputElement).checked; void app.saveSettings(); }} /> {l}</label>{/each}
-          <p class="muted priv">{t('privacy')}</p>
-        </div>
-      </aside>
-      <button class="edge l" onclick={() => { app.leftOpen = !app.leftOpen; }} aria-label={app.leftOpen ? t('side.collapse') : t('side.expand')} title="[">{app.leftOpen ? '‹' : '›'}</button>
+  <div class="app" class:content={app.contentMode}>
+    <header class="top">
+      <div class="brand"><svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 24 L13 10 L18 18 L21 13 L27 24Z" fill="none" stroke="#7cc4ff" stroke-width="2.4" stroke-linejoin="round" /></svg>{t('app.name')}</div>
+      {#if app.profiles.length}
+        <select aria-label="Wand wählen" style="width:190px" value={app.profile?.id ?? ''} onchange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v === '__new') { app.mode = 'setup'; (e.target as HTMLSelectElement).value = app.profile?.id ?? ''; } else void app.selectProfile(v); }}>
+          {#each app.profiles as p (p.id)}<option value={p.id}>{p.name}</option>{/each}<option value="__new">＋ Neue Wand …</option></select>
+      {/if}
+      {#if app.mode !== 'setup' && app.profile}
+        <div class="modes" role="tablist" aria-label="Modus">{#each MODES as [m, l, k] (m)}<button role="tab" aria-selected={app.mode === m} class:on={app.mode === m} onclick={() => setMode(m)} title={`Taste ${k}`}>{l}</button>{/each}</div>
+      {/if}
+      <span class="grow"></span>
+      {#if app.mode === 'live' && live.source}<span class="pill"><span class="dot {regDot}"></span> Wand {app.registration.ampel === 'gruen' ? 'ausgerichtet' : app.registration.ampel === 'gelb' ? 'ungenau' : app.registration.ampel === 'rot' ? 'nicht ausgerichtet' : '…'}</span>{/if}
+      {#if live.running}<span class="pill" style="color:var(--c-error)">● läuft</span>{/if}
+      <button class="sm" onclick={() => { app.leftOpen = !app.leftOpen; }} aria-label="Linke Leiste" title="[">◧</button>
+      <button class="sm" onclick={() => { app.rightOpen = !app.rightOpen; }} aria-label="Rechte Leiste" title="]">◨</button>
+      <button class="sm" onclick={() => (app.settingsOpen = !app.settingsOpen)} aria-label="Einstellungen">⚙ Einstellungen</button>
+    </header>
+
+    {#if app.mode === 'setup'}
+      <div style="grid-row:2 / 4;min-height:0"><SetupWizard /></div>
+    {:else}
+      <div class="body" style:--lw={app.leftOpen && !app.contentMode ? '272px' : '0px'} style:--rw={app.rightOpen && !app.contentMode ? '300px' : '0px'}>
+        <aside class="side l" style:display={app.leftOpen ? undefined : 'none'}><LeftPanel /></aside>
+        <main style="min-width:0;min-height:0"><Stage bind:fps /></main>
+        <aside class="side r" style:display={app.rightOpen ? undefined : 'none'}><RightPanel /></aside>
+      </div>
+      <BottomBar />
     {/if}
 
-    <main>
-      {#if app.page === 'start'}<Start />{:else if app.page === 'live'}<Live />{:else if app.page === 'scan'}<Scan />{:else if app.page === 'sessions'}<Sessions />{:else if app.page === 'esp32'}<Esp32 />{:else}<Settings />{/if}
-    </main>
-
-    {#if !app.contentMode && app.page === 'live'}
-      <button class="edge r" onclick={() => { app.rightOpen = !app.rightOpen; }} aria-label={app.rightOpen ? t('side.collapse') : t('side.expand')} title="]">{app.rightOpen ? '›' : '‹'}</button>
-      <aside class="right" class:closed={!app.rightOpen} aria-label="Kontakte und Status">
-        <section><button class="sh" onclick={() => sec('kontakte')}>Kontakte {app.sections['kontakte'] ? '▾' : '▸'}</button>
-          {#if app.sections['kontakte']}
-            {#each LIMBS as l (l)}{@const s = out?.contact.limbs[l]}
-              <div class="limb" style:border-left-color={limbColor[l]}>
-                <b style:color={limbColor[l]}>{l}</b><span class="grow">{t('limb.' + l)}</span>
-                {#if s && s.holdId !== null && s.state !== 'FREE'}<span class="mono">Griff {s.holdId}</span><span class="badge" class:warn={s.evidence === 'geschaetzt' || s.ambiguous}>{conf(s.confidence)}</span>{:else}<span class="muted">—</span>{/if}
-                {#if s && s.ambiguous}<span class="badge warn" title="Mehrere Griffe in Reichweite">mehrdeutig</span>{/if}
-                {#if s && s.state === 'OCCLUDED_HOLD'}<span class="badge" title="Position geschätzt, Gliedmaße verdeckt">geschätzt</span>{/if}
-              </div>{/each}
-            {#if !out}<p class="muted">Noch keine Daten – Live starten.</p>{/if}
-          {/if}</section>
-        <section><button class="sh" onclick={() => sec('status')}>Tracking-Status {app.sections['status'] ? '▾' : '▸'}</button>
-          {#if app.sections['status']}<div class="kv"><span>Person</span><b>{out ? t('track.' + out.status) : '—'}</b><span>Sperre</span><b>{out?.locked ? 'aktiv' : 'aus'}</b>
-            <span>Registrierung</span><b>{app.registration.ampel}</b><span>Drift</span><b>{live.drift ? `${(live.drift.betrag * 100).toFixed(2)} % (${live.drift.status})` : '—'}</b></div>{/if}</section>
-        <section><button class="sh" onclick={() => sec('hud')}>Performance {app.sections['hud'] ? '▾' : '▸'}</button>
-          {#if app.sections['hud']}<div class="kv mono"><span>Pose</span><b>{st ? st.poseHz.toFixed(1) : '—'} Hz</b><span>Pose-Inferenz</span><b>{st ? st.poseMs.toFixed(0) : '—'} ms</b><span>Hand</span><b>{st ? `${st.handHz.toFixed(1)} Hz · ${st.handMs.toFixed(0)} ms` : '—'}</b>
-            <span>Latenz (Senden→Ergebnis)</span><b>{st ? st.latencyMs.toFixed(0) : '—'} ms</b><span>Render</span><b>{app.renderFps.toFixed(0)} FPS</b><span>Verworfene Frames</span><b>{st ? st.dropped : '—'}</b></div>{/if}</section>
-        <section><button class="sh" onclick={() => sec('debug')}>Debug {app.sections['debug'] ? '▾' : '▸'}</button>
-          {#if app.sections['debug']}{#each LIMBS as l (l)}{@const s = out?.contact.limbs[l]}<div class="mono dbg"><b>{l}</b> {s?.state ?? '—'} {#if s?.debug}pos {s.debug.pos.toFixed(2)} · v {s.debug.speed.toFixed(2)} · dwell {s.debug.dwell.toFixed(2)} · pl {s.debug.plaus.toFixed(2)}{/if}{#if s?.flags.length} [{s.flags.join(', ')}]{/if}
-            {#each s?.candidates ?? [] as c (c.holdId)}<div>↳ #{c.holdId} {c.score.toFixed(2)} {Number.isFinite(c.distanceCm) ? c.distanceCm.toFixed(1) + ' cm' : ''}</div>{/each}</div>{/each}{/if}</section>
-        <section><button class="sh" onclick={() => sec('auswertung')}>Live-Auswertung {app.sections['auswertung'] ? '▾' : '▸'}</button>
-          {#if app.sections['auswertung']}<div class="kv"><span>Aktive Griffe</span><b>{out?.contact.aktiveGriffe.join(', ') || '—'}</b><span>Aufnahme</span><b>{live.recording ? `${live.recFrames} Frames` : 'aus'}</b><span>ESP32</span><b>{app.esp.status.state}{app.esp.status.latencyMs !== null ? ` · ${app.esp.status.latencyMs} ms` : ''}</b></div>{/if}</section>
-      </aside>
+    {#if live.regPhase === 'ecken' && live.regBitmap}
+      <div class="overlay-card" style="position:fixed;z-index:70"><div class="card" style="width:min(1000px,94vw);height:min(720px,90vh);max-width:none;text-align:left;display:flex;flex-direction:column">
+        <h2>Wand-Ecken neu setzen</h2><p class="muted">Die Kamera scheint bewegt worden zu sein. Ziehe die vier Punkte auf die Wandecken.</p>
+        <div style="flex:1;min-height:300px"><CornerPicker image={live.regBitmap} bind:corners={live.regCorners} /></div>
+        <div class="row" style="margin-top:8px"><button class="primary" disabled={live.regCorners.length !== 4 || live.busy} onclick={() => live.finishRegistration()}>Übernehmen</button><button onclick={() => live.cancelRegistration()}>{t('btn.cancel')}</button></div></div></div>
+    {:else if live.regPhase === 'rechnet' || live.regPhase === 'aufnahme'}
+      <div class="overlay-card" style="position:fixed;z-index:70"><div class="card"><h2>Richte die Wand aus …</h2><progress style="width:100%"></progress></div></div>
     {/if}
 
+    <SettingsDrawer />
+    {#if app.contentMode}<button class="sm" style="position:fixed;top:8px;right:8px;z-index:90;opacity:.45" onclick={() => (app.contentMode = false)}>Content-Modus beenden (C / Esc)</button>{/if}
     <div class="toasts" aria-live="polite">{#each app.toasts as x (x.id)}<div class="toast {x.kind}" role="status">{x.text}</div>{/each}</div>
   </div>
 {/if}
-
-<style>
-  .boot { height: 100%; display: grid; place-items: center; text-align: center; }
-  .shell { display: grid; grid-template-columns: var(--l) minmax(0, 1fr) var(--r); height: 100%; position: relative; transition: grid-template-columns .15s; } .shell.content { grid-template-columns: 0 1fr 0; }
-  aside { background: var(--c-surface); border-right: 1px solid var(--c-border); overflow: auto; min-width: 0; } aside.closed { display: none; } .right { border-right: none; border-left: 1px solid var(--c-border); padding: 8px; }
-  main { min-width: 0; min-height: 0; overflow: hidden; position: relative; } .brand { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 17px; }
-  nav { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; } .nav { display: flex; justify-content: space-between; align-items: center; text-align: left; border-color: transparent; background: transparent; } .nav.on { background: color-mix(in srgb, var(--c-accent) 18%, transparent); border-color: var(--c-accent); }
-  .ctx { padding: 12px 16px; } .ctx h3 { margin: 14px 0 6px; } .chk { display: flex; gap: 8px; align-items: center; margin: 4px 0; font-size: 14px; color: var(--c-text); } .chk input { width: 18px; height: 18px; accent-color: var(--c-accent); } .priv { font-size: 12px; margin-top: 20px; }
-  .edge { position: absolute; z-index: 15; top: 50%; width: 22px; min-height: 56px; padding: 0; border-radius: 0 8px 8px 0; } .edge.l { left: calc(var(--l) - 1px); } .edge.r { right: calc(var(--r) - 1px); border-radius: 8px 0 0 8px; }
-  .sh { width: 100%; text-align: left; border: none; background: transparent; font-weight: 650; font-size: 13px; color: var(--c-textMuted); text-transform: uppercase; letter-spacing: .04em; min-height: 36px; } section { border-bottom: 1px solid var(--c-border); padding-bottom: 8px; margin-bottom: 4px; }
-  .limb { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-left: 4px solid; margin: 4px 0; background: var(--c-surface2); border-radius: 0 8px 8px 0; flex-wrap: wrap; } .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 13px; padding: 0 4px; } .kv span { color: var(--c-textMuted); } .dbg { font-size: 11px; margin: 4px 0; }
-  .toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 100; max-width: min(640px, 92vw); } .toast { padding: 10px 14px; border-radius: 10px; background: var(--c-surface2); border: 1px solid var(--c-border); box-shadow: var(--elev-2); }
-  .toast.ok { border-color: var(--c-ok); } .toast.warn { border-color: var(--c-warn); } .toast.err { border-color: var(--c-error); }
-  @media (max-width: 1000px) { .shell { grid-template-columns: 0 1fr 0 !important; } aside { position: absolute; z-index: 30; height: 100%; width: 300px; } .edge { display: none; } }
-</style>

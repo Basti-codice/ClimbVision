@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BIN_SIZE, ProtocolError, Reassembler, StateSender, byteLength, chunk, decode, decodeBinary, encode, encodeBinary, stateMsg, type Msg, type Snapshot } from '../src/transport/protocol';
-import { CsvError, defaultMapping, ledFrame, mappingFromCsv, mappingToCsv, serpentineMapping } from '../src/transport/mapping';
-import { VirtualEsp32, WebSocketTransport, type Clock, type TransportStatus, type WsLike } from '../src/transport/transports';
+import { WebSocketTransport, type Clock, type TransportStatus, type WsLike } from '../src/transport/transports';
 
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({ LH: { holdId: 12, confidence: 0.91 }, RH: { holdId: 22, confidence: 0.64, ambiguous: true }, LF: { holdId: null, confidence: 0 }, RF: { holdId: 5, confidence: 0.4 }, ...over });
 
@@ -118,33 +117,6 @@ describe('Sende-Drosselung', () => {
   });
 });
 
-describe('Mapping', () => {
-  it('CSV Roundtrip, Semikolon, Kommentare, BOM', () => {
-    const m = defaultMapping(300); m.map = { 1: 0, 2: 5, 10: 99 };
-    const csv = mappingToCsv(m);
-    expect(mappingFromCsv(csv, 300).map).toEqual(m.map);
-    expect(mappingFromCsv('﻿holdId;led\n# Kommentar\n4;7\n', 300).map).toEqual({ 4: 7 });
-  });
-  it('Fehler: Kopf, Zahlen, Bereich; Warnungen: Duplikate', () => {
-    expect(() => mappingFromCsv('', 10)).toThrow(CsvError);
-    expect(() => mappingFromCsv('a,b\n1,2', 10)).toThrow(/Kopfzeile/);
-    expect(() => mappingFromCsv('holdId,led\nx,2', 10)).toThrow(/ungültige/);
-    expect(() => mappingFromCsv('holdId,led\n1,10', 10)).toThrow(/außerhalb/);
-    const r = mappingFromCsv('holdId,led\n1,2\n1,3\n2,3', 10);
-    expect(r.warnungen.length).toBe(2);
-  });
-  it('Serpentine und LED-Frame (Mischfarbe, Helligkeit)', () => {
-    expect(serpentineMapping([[1, 2, 3], [4, 5, 6]])).toEqual({ 1: 0, 2: 1, 3: 2, 6: 3, 5: 4, 4: 5 });
-    const m = defaultMapping(10); m.map = { 12: 0, 22: 1, 5: 2 }; m.brightness = 255;
-    const f = ledFrame(snap(), m);
-    expect(f.map((p) => p.led)).toEqual([0, 1, 2]);
-    expect(f[0]!.rgb).toEqual([0x56, 0xb4, 0xe9]);
-    const both = ledFrame({ ...snap(), RH: { holdId: 12, confidence: 1 } }, m);
-    expect(both[0]!.rgb).toEqual([Math.min(255, 0x56 + 0xe6), Math.min(255, 0xb4 + 0x9f), Math.min(255, 0xe9 + 0)]);
-    m.brightness = 0; expect(ledFrame(snap(), m)[0]!.rgb).toEqual([0, 0, 0]);
-  });
-});
-
 class FakeWs implements WsLike {
   static all: FakeWs[] = [];
   readyState = 0; sent: string[] = [];
@@ -206,27 +178,5 @@ describe('WebSocketTransport', () => {
     ws.onmessage?.({ data: '{kaputt' });
     let st!: TransportStatus; tr.onStatus((s) => (st = s));
     expect(st.meldung).toMatch(/Ungültige/);
-  });
-});
-
-describe('Virtueller ESP32', () => {
-  it('Pipeline ohne Hardware: hello → ack, LED-Frame, Log, Verlusterkennung per seq', async () => {
-    const clock = new FakeClock();
-    const m = defaultMapping(50); m.map = { 12: 0, 22: 1, 5: 2 };
-    const v = new VirtualEsp32(m, clock);
-    await v.connect();
-    const got: Msg[] = []; v.onMessage((x) => got.push(x));
-    v.send({ v: 1, t: 'hello', seq: 1, ts: 0, client: 'climbvision' });
-    v.send(stateMsg(1, 10, snap()));
-    clock.advance(20);
-    expect(got.map((x) => x.t)).toEqual(['hello', 'ack']);
-    expect(v.leds.map((l) => l.led)).toEqual([0, 1, 2]);
-    expect(v.log.filter((l) => l.dir === 'tx').length).toBe(2);
-    v.send(stateMsg(4, 20, snap())); // seq 2,3 fehlen
-    expect(v.missed).toBe(2);
-    v.send({ v: 1, t: 'cfg', seq: 5, map: [[12, 9]], brightness: 10 });
-    expect(v.mapping.map).toEqual({ 12: 9 });
-    v.simulateDrop(); const before = v.log.length; v.send(stateMsg(6, 30, snap())); expect(v.log.length).toBe(before); // getrennt → nichts
-    v.simulateRecover(); v.send(snap()); expect(v.lastSnapshot!.LH.holdId).toBe(12); // Binärpfad
   });
 });
