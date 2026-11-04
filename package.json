@@ -1,0 +1,39 @@
+{
+  "name": "climbvision",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ClimbVision – lokale Echtzeit-Kletter-Analyse (Griff-Kontakt-Zuordnung auf digitaler Wandkarte)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "postinstall": "node scripts/copy-vendor.mjs",
+    "typecheck": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json --threshold error",
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "e2e": "node scripts/e2e.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.2",
+    "fflate": "0.8.3",
+    "idb": "8.0.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "26.6.6",
+    "eslint": "10.14.0",
+    "eslint-plugin-svelte": "3.24.0",
+    "fake-indexeddb": "^6.2.7",
+    "jpeg-js": "0.4.4",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}

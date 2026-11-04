@@ -1,0 +1,230 @@
+/** Live-Controller: verbindet Quelle, Registrierung, Engine, Pipeline, Aufnahme, ESP32 und Drift-Überwachung. */
+import { app } from './state.svelte';
+import { CameraSource, listCameras, type CameraDevice } from '../sources/camera';
+import { VideoFileSource } from '../sources/videofile';
+import type { FrameSource } from '../sources/types';
+import { LiveEngine } from '../engine/live';
+import { LivePipeline, defaultPipelineConfig, type FrameOutput } from '../pipeline/live';
+import { loadModel } from './models';
+import { bitmapToRgba, medianFrames, rgbaToBlob, blobToBytes } from './imageio';
+import { normalizedHomography, refinedHomography, rectify, verdict, rectSize } from './wizard';
+import type { Rgba } from '../image/raster';
+import { resizeRgba, toGray } from '../image/raster';
+import { measureDrift, type DriftMeasure } from '../registration/drift';
+import { SessionRecorder, encodeChunk } from '../session/recorder';
+import { snapshotOf } from './esp32';
+import type { Mat3, Vec2 } from '../geometry/homography';
+import { mul3 } from '../geometry/homography';
+import type { RenderState } from '../ui/wallTypes';
+import type { SessionDoc } from '../core/schemas';
+
+export type RegPhase = 'aus' | 'aufnahme' | 'ecken' | 'rechnet';
+
+class LiveController {
+  devices = $state<CameraDevice[]>([]);
+  deviceId = $state('');
+  source = $state<FrameSource | null>(null);
+  sourceLabel = $state('');
+  running = $state(false);
+  busy = $state(false);
+  armLock = $state(false);
+  regPhase = $state<RegPhase>('aus');
+  regImage = $state<Rgba | null>(null);
+  regBitmap = $state<ImageBitmap | null>(null);
+  regCorners = $state<Vec2[]>([]);
+  regInfo = $state('');
+  drift = $state<DriftMeasure | null>(null);
+  paused = $state(false);
+  recording = $state(false);
+  recFrames = $state(0);
+  lastSession = $state<string | null>(null);
+  cmAssumed = $state(false);
+  videoFile: File | null = null;
+
+  private engine: LiveEngine | null = null;
+  pipeline: LivePipeline | null = null;
+  private recorder: SessionRecorder | null = null;
+  private prev: { out: FrameOutput; at: number } | null = null; private curr: { out: FrameOutput; at: number } | null = null;
+  private driftTimer: number | null = null; private okStreak = 0; private badStreak = 0;
+  private mediaRec: MediaRecorder | null = null; private videoChunks: Blob[] = []; private sessionId = '';
+
+  async refreshDevices(): Promise<void> { try { this.devices = await listCameras(); if (!this.deviceId && this.devices[0]) this.deviceId = this.devices[0].deviceId; } catch (e) { app.error(e); } }
+
+  /** Quelle öffnen (nur Vorschau, noch keine Erkennung). */
+  async openSource(kind: 'kamera' | 'datei', file?: File): Promise<void> {
+    this.closeSource(); this.busy = true;
+    try {
+      const s: FrameSource = kind === 'kamera'
+        ? new CameraSource({ deviceId: this.deviceId || undefined, width: app.settings.cameraWidth, fps: app.settings.cameraFps, maxFrameWidth: 960 })
+        : new VideoFileSource(file as File, { loop: true, maxFrameWidth: 960 });
+      if (kind === 'datei') this.videoFile = file ?? null;
+      await s.start(); this.source = s; this.sourceLabel = s.info().label;
+      await this.refreshDevices();
+      const i = s.info(); app.toast(`Quelle aktiv: ${i.width}×${i.height}${i.fps ? ` @ ${Math.round(i.fps)} fps` : ''}${i.tatsaechlich ? ' (tatsächlich geliefert)' : ''}`, 'ok');
+    } catch (e) { app.error(e); this.source = null; } finally { this.busy = false; }
+  }
+  closeSource(): void { void this.stop(); this.source?.stop(); this.source = null; this.sourceLabel = ''; }
+
+  // ---------- Registrierung ----------
+  /** Schritt 1: aktuelles Bild der laufenden Quelle aufnehmen (Median) → Ecken markieren. */
+  async beginRegistration(): Promise<void> {
+    const v = this.source?.element; if (!v || !app.profile) { app.toast('Bitte zuerst eine Kamera oder Videodatei öffnen.', 'warn'); return; }
+    this.regPhase = 'aufnahme'; this.busy = true;
+    try {
+      const frames: Rgba[] = []; const wasPaused = v.paused; v.pause();
+      for (let i = 0; i < 5; i++) { const b = await createImageBitmap(v); frames.push(await bitmapToRgba(b, 1600)); b.close(); await new Promise((r) => setTimeout(r, 80)); }
+      if (!wasPaused) void v.play();
+      const img = medianFrames(frames);
+      this.regImage = img; this.regBitmap?.close(); this.regBitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height));
+      // Startvorschlag: gespeicherte Ecken (normalisiert) auf das neue Bild übertragen
+      const p = app.profile, rw = p.referenzfoto.breite_px, rh = p.referenzfoto.hoehe_px;
+      this.regCorners = p.ecken_bild.map((c) => [(c[0] / rw) * img.width, (c[1] / rh) * img.height] as Vec2);
+      this.regInfo = 'Die Ecken wurden aus der letzten Aufstellung übernommen. Bitte prüfen und ggf. auf die aktuellen Wandecken ziehen.';
+      this.regPhase = 'ecken';
+    } catch (e) { app.error(e); this.regPhase = 'aus'; } finally { this.busy = false; }
+  }
+  cancelRegistration(): void { this.regPhase = 'aus'; this.regBitmap?.close(); this.regBitmap = null; }
+
+  /** Schritt 2: Homographie aus den Ecken, Entzerrung, bildbasierte Verfeinerung + Plausibilität. */
+  async finishRegistration(): Promise<void> {
+    const p = app.profile, img = this.regImage; if (!p || !img || this.regCorners.length !== 4 || !app.rect) return;
+    this.regPhase = 'rechnet'; this.busy = true;
+    try {
+      const h0 = normalizedHomography(this.regCorners, img.width, img.height);
+      const sz = rectSize(p.aspekt, 800);
+      const neu = rectify(img, h0, p.aspekt, 800);
+      const ref = resizeRgba(app.rect, sz.w, sz.h);
+      const r = await app.cv.register(ref, neu, app.holds.map((h) => h.polygon), p.aspekt);
+      const h = refinedHomography(h0, r.hRes);
+      const v = verdict(r.quality);
+      app.registration = { ampel: r.quality.ampel, h: v.freigabe ? h : null, quality: r.quality };
+      await app.store.putProfile({ ...p, registrierung: { ...p.registrierung, letzte_qualitaet: r.quality }, geaendert: new Date().toISOString() });
+      app.toast(v.text, r.quality.ampel === 'gruen' ? 'ok' : r.quality.ampel === 'gelb' ? 'warn' : 'err', 12000);
+      this.regInfo = `NCC ${r.quality.ncc.toFixed(2)} · Eckverschiebung ${(r.quality.eckverschiebung * 100).toFixed(2)} % · Kantenkontrast ${r.quality.griffKontrast.toFixed(2)} · ${Math.round(r.ms)} ms`;
+      this.regPhase = 'aus'; this.regBitmap?.close(); this.regBitmap = null;
+    } catch (e) { app.error(e, 'Registrierung fehlgeschlagen: '); this.regPhase = 'ecken'; } finally { this.busy = false; }
+  }
+
+  // ---------- Live ----------
+  get ready(): { ok: boolean; grund: string } {
+    if (!app.profile) return { ok: false, grund: 'Kein Wandprofil gewählt.' };
+    if (!app.holds.length) return { ok: false, grund: 'Es gibt noch keine Griffe. Bitte zuerst „Scan & Griffe“ ausführen.' };
+    if (!app.modelsCached[app.settings.poseModel]) return { ok: false, grund: 'Das Pose-Modell ist noch nicht geladen (Start & Setup → Modelle).' };
+    if (!this.source) return { ok: false, grund: 'Keine Kamera/Videodatei geöffnet.' };
+    if (app.registration.ampel === 'rot') return { ok: false, grund: 'Registrierung fehlgeschlagen. Bitte Ecken neu markieren oder die Wand neu scannen.' };
+    if (app.registration.ampel === 'unbekannt' || !app.registration.h) return { ok: false, grund: 'Die Kamera-Aufstellung ist noch nicht registriert („Wand registrieren“).' };
+    return { ok: true, grund: '' };
+  }
+
+  async start(): Promise<void> {
+    const r = this.ready; if (!r.ok) { app.toast(r.grund, 'warn'); return; }
+    const p = app.profile as NonNullable<typeof app.profile>, s = app.settings;
+    this.busy = true;
+    try {
+      const pose = await loadModel(app.store, s.poseModel); if (!pose) throw new Error('Pose-Modell fehlt im lokalen Speicher.');
+      const hand = s.useHands && app.modelsCached['hand'] ? await loadModel(app.store, 'hand') : null;
+      const cm = p.hoehe_cm ?? (p.breite_cm ? p.breite_cm / p.aspekt : 240); this.cmAssumed = !p.hoehe_cm && !p.breite_cm;
+      this.pipeline = new LivePipeline(defaultPipelineConfig({
+        holds: $state.snapshot(app.holds), aspekt: p.aspekt, homography: app.registration.h as Mat3, frameWidth: 1, frameHeight: 1, cmPerUnit: cm, swapLeftRight: s.swapLeftRight,
+        oneEuro: { minCutoff: s.oneEuroMinCutoff, beta: s.oneEuroBeta, dCutoff: 1 }, contact: { tolHandCm: s.tolHandCm, tolFootCm: s.tolFootCm, thetaOn: s.thetaOn, thetaOff: s.thetaOff },
+      }));
+      this.sessionId = crypto.randomUUID(); const sid = this.sessionId;
+      this.recorder = s.recordData ? new SessionRecorder((c, i) => void app.store.putChunk(`${sid}-${i}`, encodeChunk(c))) : null;
+      this.engine = new LiveEngine({
+        source: this.source as FrameSource, ownsSource: false, pipeline: this.pipeline, poseModel: pose, handModel: hand, delegate: s.delegate, handIntervalMs: s.handIntervalMs, swapLeftRight: s.swapLeftRight,
+        onOutput: (o) => this.onOutput(o), onStats: (st) => { app.stats = st; }, onError: (m) => app.toast(m, 'err'),
+      });
+      await this.engine.start();
+      this.running = true; app.live = true; this.okStreak = 0; this.badStreak = 0; this.paused = false;
+      this.driftTimer = window.setInterval(() => void this.checkDrift(), 1500);
+      if (s.recordVideo && this.source?.element) this.startVideoRecording();
+      this.recording = !!this.recorder;
+    } catch (e) { app.error(e, 'Live-Start fehlgeschlagen: '); this.engine?.stop(); this.engine = null; } finally { this.busy = false; }
+  }
+
+  private onOutput(o: FrameOutput): void {
+    const now = performance.now();
+    this.prev = this.curr; this.curr = { out: o, at: now };
+    app.output = o;
+    app.esp.offer(o.contact, now);
+    if (this.recorder) { this.recorder.addFrame(o.t, o.skeleton, o.contact); if (o.events.length) this.recorder.addEvents(o.events); this.recFrames = this.recorder.frameCount; }
+  }
+
+  /** Rendering-Zustand mit linearer Extrapolation (max. +40 %) zwischen Inferenzschritten → flüssige 60 FPS. */
+  renderState = (): RenderState => {
+    const c = this.curr; if (!c) return { limbs: {}, skeleton: null };
+    const limbs: RenderState['limbs'] = {};
+    for (const [k, v] of Object.entries(c.out.contact.limbs)) limbs[k as keyof RenderState['limbs']] = { holdId: v.holdId, confidence: v.confidence, state: v.state, evidence: v.evidence, candidates: v.candidates, ambiguous: v.ambiguous };
+    let sk = c.out.skeleton;
+    const p = this.prev;
+    const psk = p?.out.skeleton;
+    if (sk && p && psk) {
+      const dt = Math.max(30, c.at - p.at), f = Math.min(1.4, 1 + (performance.now() - c.at) / dt);
+      sk = sk.map((pt, i) => { const q = psk[i]; return pt && q ? { u: q.u + (pt.u - q.u) * f, v: q.v + (pt.v - q.v) * f, c: pt.c } : pt; });
+    }
+    return { limbs, skeleton: sk };
+  };
+
+  /** Drift-Überwachung: aktuelles Kamerabild entzerren und mit den Referenz-Ankern vergleichen. */
+  private async checkDrift(): Promise<void> {
+    const v = this.source?.element, h = app.registration.h, p = app.profile;
+    if (!v || !h || !p || !app.anchors.length || !v.videoWidth) return;
+    try {
+      const k = Math.min(1, 640 / v.videoWidth), w = Math.round(v.videoWidth * k), hh = Math.round(v.videoHeight * k);
+      const c = new OffscreenCanvas(w, hh), g = c.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D; g.drawImage(v, 0, 0, w, hh);
+      const img = g.getImageData(0, 0, w, hh);
+      const rect = rectify({ width: w, height: hh, data: img.data }, h, p.aspekt, 512);
+      const sk = app.output?.skeleton; const boxes: [number, number, number, number][] = [];
+      if (sk) { const pts = sk.filter((q): q is NonNullable<typeof q> => !!q && q.c > 0.3); if (pts.length) boxes.push([Math.min(...pts.map((q) => q.u)) - 0.08, Math.min(...pts.map((q) => q.v)) - 0.08, Math.max(...pts.map((q) => q.u)) + 0.08, Math.max(...pts.map((q) => q.v)) + 0.08]); }
+      const m = measureDrift(app.anchors, toGray(rect), { workWidth: 512, maskBoxes: boxes });
+      this.drift = m;
+      if (m.status === 'verloren') { this.badStreak++; this.okStreak = 0; } else if (m.status === 'ok') { this.okStreak++; this.badStreak = 0; } else { this.badStreak = 0; this.okStreak = 0; }
+      if (!this.paused && this.badStreak >= 2) { this.paused = true; this.pipeline?.setPaused(true); app.toast('Kamera scheinbar bewegt – Kontaktzuordnung pausiert. Bitte neu registrieren.', 'warn', 10000); }
+      else if (this.paused && this.okStreak >= 3) { this.paused = false; this.pipeline?.setPaused(false); app.toast('Registrierung wiederhergestellt – Zuordnung läuft weiter.', 'ok'); }
+    } catch { /* Drift-Prüfung ist best effort */ }
+  }
+
+  lockPerson(click: { x: number; y: number }): void { this.engine?.lockAt(click); this.armLock = false; }
+  unlockPerson(): void { this.engine?.unlock(); }
+  setPaused(p: boolean): void { this.paused = p; this.pipeline?.setPaused(p); }
+
+  private startVideoRecording(): void {
+    try {
+      const v = this.source?.element as HTMLVideoElement & { captureStream?: () => MediaStream }; if (!v?.captureStream) return;
+      this.mediaRec = new MediaRecorder(v.captureStream(), { mimeType: 'video/webm' }); this.videoChunks = [];
+      this.mediaRec.ondataavailable = (e) => { if (e.data.size) this.videoChunks.push(e.data); }; this.mediaRec.start(1000);
+    } catch { app.toast('Videoaufnahme wird von diesem Browser nicht unterstützt.', 'warn'); }
+  }
+
+  async stop(): Promise<void> {
+    if (this.driftTimer !== null) { clearInterval(this.driftTimer); this.driftTimer = null; }
+    const eng = this.engine; this.engine = null;
+    const rec = this.recorder; this.recorder = null;
+    const wasRunning = this.running; this.running = false; app.live = false;
+    if (eng) { eng.stop(); }
+    if (this.mediaRec && this.mediaRec.state !== 'inactive') { const mr = this.mediaRec; await new Promise<void>((r) => { mr.onstop = () => r(); mr.stop(); }); }
+    if (wasRunning && rec && app.profile && rec.frameCount > 10) {
+      try {
+        rec.finish();
+        let videoBlobId: string | undefined;
+        if (this.videoChunks.length) { videoBlobId = `${this.sessionId}:video`; await app.store.putBlob(videoBlobId, 'video/webm', await blobToBytes(new Blob(this.videoChunks, { type: 'video/webm' }))); this.videoChunks = []; }
+        const p = app.profile, info = this.source?.info();
+        const n = Math.ceil(rec.frameCount / 150);
+        const doc: SessionDoc = {
+          schemaVersion: 1, typ: 'Session', id: this.sessionId, wandId: p.id,
+          wand_snapshot: { homographie: (app.registration.h ?? p.homographie) as SessionDoc['wand_snapshot']['homographie'], aspekt: p.aspekt, griffe_anzahl: app.holds.length, qualitaet: app.registration.quality },
+          kamera_kalibrierung: { quelle: info?.label ?? '', breite_px: info?.width ?? 0, hoehe_px: info?.height ?? 0, fps: info?.fps ?? null },
+          modell: { pose: app.settings.poseModel, hand: app.settings.useHands ? 'hand' : null }, start: new Date(Date.now() - rec.dauerMs).toISOString(), dauer_ms: rec.dauerMs,
+          chunkIds: Array.from({ length: n }, (_, i) => `${this.sessionId}-${i}`), events: rec.events,
+          einstellungen: { ...$state.snapshot(app.settings) as unknown as Record<string, unknown>, ...(videoBlobId ? { videoBlobId } : {}), cmPerUnit: p.hoehe_cm ?? null },
+        };
+        await app.store.putSession(doc); app.sessions = await app.store.listSessions(p.id); this.lastSession = doc.id;
+        app.toast(`Session gespeichert (${(doc.dauer_ms / 1000).toFixed(0)} s, ${doc.events.length} Ereignisse).`, 'ok');
+      } catch (e) { app.error(e, 'Session konnte nicht gespeichert werden: '); }
+    }
+    this.recording = false; this.prev = this.curr = null; this.pipeline = null; this.drift = null; app.output = null; app.stats = null;
+  }
+}
+
+export const live = new LiveController();
+export { snapshotOf, rgbaToBlob, mul3 };

@@ -10,3 +10,8 @@ __pycache__/
 *.task
 .DS_Store
 testdata/
+dist/
+public/vendor/
+*.local
+coverage/
+tests/_exp/
